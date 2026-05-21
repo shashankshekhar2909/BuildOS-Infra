@@ -11,6 +11,7 @@ export type LogRow = {
   log_type: string;
   source: string;
   message: string;
+  actor: string | null;
 };
 
 const MAX_ROWS = 200;

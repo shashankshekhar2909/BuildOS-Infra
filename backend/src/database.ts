@@ -148,6 +148,7 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 ensureColumn("containers", "auto_heal", "auto_heal INTEGER DEFAULT 0");
 ensureColumn("containers", "last_heal_attempt", "last_heal_attempt TEXT");
 ensureColumn("nodes", "parent_node_id", "parent_node_id TEXT");
+ensureColumn("system_logs", "actor", "actor TEXT");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS pve_guests (
@@ -195,8 +196,8 @@ const insertContainerStatement = db.prepare(`
   )
 `);
 const insertLogStatement = db.prepare(`
-  INSERT INTO system_logs (timestamp, log_type, source, message)
-  VALUES (@timestamp, @log_type, @source, @message)
+  INSERT INTO system_logs (timestamp, log_type, source, message, actor)
+  VALUES (@timestamp, @log_type, @source, @message, @actor)
 `);
 const countCloudflareZonesStatement = db.prepare("SELECT COUNT(*) AS count FROM cloudflare_zones");
 const insertCloudflareZoneStatement = db.prepare(`
@@ -322,7 +323,8 @@ function seedDatabase(): void {
     timestamp: now,
     log_type: "info",
     source: "CONTROL_PLANE",
-    message: "Phase 1 database bootstrap completed."
+    message: "Phase 1 database bootstrap completed.",
+    actor: null
   });
 }
 
@@ -444,6 +446,7 @@ export type SystemLogRow = {
   log_type: string;
   source: string;
   message: string;
+  actor: string | null;
 };
 
 export type MetricsRow = {
@@ -589,7 +592,9 @@ export function rotateNodeToken(id: string): { plainToken: string } | null {
 
 export function listRecentLogs(limit = 200): SystemLogRow[] {
   return db
-    .prepare(`SELECT id, timestamp, log_type, source, message FROM system_logs ORDER BY id DESC LIMIT ?`)
+    .prepare(
+      `SELECT id, timestamp, log_type, source, message, actor FROM system_logs ORDER BY id DESC LIMIT ?`
+    )
     .all(Math.min(Math.max(limit, 1), 500)) as SystemLogRow[];
 }
 
@@ -773,18 +778,24 @@ export function onSystemLog(listener: LogListener): () => void {
   return () => logListeners.delete(listener);
 }
 
-export function appendSystemLog(logType: string, source: string, message: string): void {
+export function appendSystemLog(
+  logType: string,
+  source: string,
+  message: string,
+  actor: string | null = null
+): void {
   const timestamp = new Date().toISOString();
   const result = insertLogStatement.run({
     timestamp,
     log_type: logType,
     source,
-    message
+    message,
+    actor
   });
   const id = Number(result.lastInsertRowid);
   for (const listener of logListeners) {
     try {
-      listener({ id, timestamp, log_type: logType, source, message });
+      listener({ id, timestamp, log_type: logType, source, message, actor });
     } catch {
       // ignore listener errors
     }

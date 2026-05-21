@@ -1,5 +1,6 @@
 import http from "http";
 import express from "express";
+import helmet from "helmet";
 import { config } from "./config.js";
 import { issueAuthToken, requireAuth, requireRole, verifyCredentials } from "./auth.js";
 import {
@@ -67,6 +68,28 @@ const rootDir = process.cwd();
 // Behind exactly one proxy (Cloudflare Tunnel / Caddy / Nginx). Make req.ip honor
 // X-Forwarded-For. CF sets CF-Connecting-IP, which we prefer where available.
 app.set("trust proxy", 1);
+
+// Security headers. CSP is conservative; relax if you embed third-party iframes.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "'unsafe-inline'"], // Next.js inline hydration scripts
+        "style-src": ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        "font-src": ["'self'", "https://fonts.gstatic.com", "data:"],
+        "img-src": ["'self'", "data:", "blob:"],
+        "connect-src": ["'self'", "wss:", "https:"],
+        "frame-ancestors": ["'none'"],
+        "object-src": ["'none'"],
+        "base-uri": ["'self'"]
+      }
+    },
+    crossOriginEmbedderPolicy: false, // breaks some asset loads behind CF Tunnel
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" }
+  })
+);
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -150,7 +173,12 @@ app.post("/api/cloudflare/zones", requireRole("admin"), (req, res) => {
     return;
   }
   upsertCloudflareZone({ id, name });
-  appendSystemLog("info", "CLOUDFLARE_ENGINE", `Cloudflare zone saved: ${name} (${id}).`);
+  appendSystemLog(
+    "info",
+    "CLOUDFLARE_ENGINE",
+    `Cloudflare zone saved: ${name} (${id}).`,
+    (res.locals.auth as { sub: string }).sub
+  );
   res.status(201).json({ success: true, zones: cfListCloudflareZones() });
 });
 
@@ -216,7 +244,7 @@ app.post("/api/auth/login", (req, res) => {
   // DB role wins over requested role.
   const actualRole = verified.role;
   const token = issueAuthToken({ username, role: actualRole });
-  appendSystemLog("info", "AUTH", `User '${username}' logged in (${actualRole}).`);
+  appendSystemLog("info", "AUTH", `User '${username}' logged in (${actualRole}).`, username);
   res.json({
     success: true,
     token,
@@ -279,7 +307,7 @@ app.post("/api/users", requireRole("admin"), (req, res) => {
   }
   const actor = (res.locals.auth as { sub: string }).sub;
   const created = createUser({ username, password, role });
-  appendSystemLog("info", "AUTH", `User '${username}' (${role}) created by ${actor}.`);
+  appendSystemLog("info", "AUTH", `User '${username}' (${role}) created by ${actor}.`, actor);
   res.status(201).json(created);
 });
 
@@ -301,7 +329,7 @@ app.patch("/api/users/:id/role", requireRole("admin"), (req, res) => {
   }
   const actor = (res.locals.auth as { sub: string }).sub;
   changeRole(id, role);
-  appendSystemLog("warning", "AUTH", `User '${user.username}' role -> ${role} by ${actor}.`);
+  appendSystemLog("warning", "AUTH", `User '${user.username}' role -> ${role} by ${actor}.`, actor);
   res.json({ success: true });
 });
 
@@ -336,7 +364,7 @@ app.patch("/api/users/:id/password", requireAuth, (req, res) => {
     }
   }
   changePassword(id, new_password);
-  appendSystemLog("warning", "AUTH", `Password changed for '${target.username}' by ${auth.sub}.`);
+  appendSystemLog("warning", "AUTH", `Password changed for '${target.username}' by ${auth.sub}.`, auth.sub);
   res.json({ success: true });
 });
 
@@ -361,7 +389,7 @@ app.delete("/api/users/:id", requireRole("admin"), (req, res) => {
     return;
   }
   deleteUser(id);
-  appendSystemLog("warning", "AUTH", `User '${target.username}' deleted by ${auth.sub}.`);
+  appendSystemLog("warning", "AUTH", `User '${target.username}' deleted by ${auth.sub}.`, auth.sub);
   res.json({ success: true });
 });
 
@@ -404,7 +432,8 @@ app.post("/api/infra/nodes/register", requireRole("admin"), (req, res) => {
     return;
   }
 
-  appendSystemLog("info", name, `Node '${name}' registered with id '${nodeId}'.`);
+  const actor = (res.locals.auth as { sub: string }).sub;
+  appendSystemLog("info", name, `Node '${name}' registered with id '${nodeId}'.`, actor);
 
   const masterUrl = config.appUrl.replace(/\/$/, "");
   res.status(201).json({
@@ -455,7 +484,12 @@ app.patch("/api/infra/nodes/:id", requireRole("admin"), (req, res) => {
     region
   });
 
-  appendSystemLog("info", name, `Node '${req.params.id}' updated.`);
+  appendSystemLog(
+    "info",
+    name,
+    `Node '${req.params.id}' updated.`,
+    (res.locals.auth as { sub: string }).sub
+  );
   res.json({ success: true, node_id: req.params.id });
 });
 
@@ -467,7 +501,12 @@ app.delete("/api/infra/nodes/:id", requireRole("admin"), (req, res) => {
   }
 
   deleteNode(req.params.id);
-  appendSystemLog("info", existing.name, `Node '${existing.name}' deleted.`);
+  appendSystemLog(
+    "info",
+    existing.name,
+    `Node '${existing.name}' deleted.`,
+    (res.locals.auth as { sub: string }).sub
+  );
   res.json({ success: true, node_id: req.params.id });
 });
 
@@ -517,7 +556,8 @@ app.post("/api/infra/containers/:id/control", requireRole("admin"), (req, res) =
   appendSystemLog(
     "info",
     container.node_id,
-    `Container '${container.name}' received '${action}' control signal.`
+    `Container '${container.name}' received '${action}' control signal.`,
+    (res.locals.auth as { sub: string }).sub
   );
 
   const transactionId = `tx_${Date.now().toString(36)}`;
@@ -624,7 +664,12 @@ app.post("/api/cloudflare/dns", requireRole("admin"), async (req, res) => {
       proxied: created.proxied ? 1 : 0,
       ttl: created.ttl
     });
-    appendSystemLog("info", "CLOUDFLARE_ENGINE", `DNS record created: ${created.name} (${created.type})`);
+    appendSystemLog(
+      "info",
+      "CLOUDFLARE_ENGINE",
+      `DNS record created: ${created.name} (${created.type})`,
+      (res.locals.auth as { sub: string }).sub
+    );
     broadcastToControlPlane({ event_type: "DNS_RECORD_CREATED", data: created });
     res.status(201).json({ success: true, record: created });
   } catch (e) {
@@ -655,7 +700,12 @@ app.delete("/api/cloudflare/dns/:id", requireRole("admin"), async (req, res) => 
   try {
     await cfDeleteDns(record.zone_id, req.params.id);
     deleteDnsRecordRow(req.params.id);
-    appendSystemLog("info", "CLOUDFLARE_ENGINE", `DNS record deleted: ${req.params.id}`);
+    appendSystemLog(
+      "info",
+      "CLOUDFLARE_ENGINE",
+      `DNS record deleted: ${req.params.id}`,
+      (res.locals.auth as { sub: string }).sub
+    );
     broadcastToControlPlane({ event_type: "DNS_RECORD_DELETED", data: { id: req.params.id } });
     res.json({ success: true, removed_id: req.params.id });
   } catch (e) {
@@ -679,7 +729,7 @@ app.post("/api/infra/emergency-kill", requireRole("admin"), (req, res) => {
   }
   const auth = res.locals.auth as { sub: string } | undefined;
   setSystemState("emergency_lockdown", "TRUE", auth?.sub ?? "unknown");
-  appendSystemLog("critical", "CONTROL_PLANE", `Emergency lockdown engaged by ${auth?.sub}.`);
+  appendSystemLog("critical", "CONTROL_PLANE", `Emergency lockdown engaged by ${auth?.sub}.`, auth?.sub ?? null);
   const agentsNotified = broadcastToAgents({
     action: "EMERGENCY_BLOCK",
     issued_at: new Date().toISOString(),
@@ -700,7 +750,7 @@ app.post("/api/infra/emergency-kill", requireRole("admin"), (req, res) => {
 app.post("/api/infra/emergency-reset", requireRole("admin"), (req, res) => {
   const auth = res.locals.auth as { sub: string } | undefined;
   setSystemState("emergency_lockdown", "FALSE", auth?.sub ?? "unknown");
-  appendSystemLog("warning", "CONTROL_PLANE", `Emergency lockdown released by ${auth?.sub}.`);
+  appendSystemLog("warning", "CONTROL_PLANE", `Emergency lockdown released by ${auth?.sub}.`, auth?.sub ?? null);
   broadcastToAgents({
     action: "EMERGENCY_RELEASE",
     issued_at: new Date().toISOString(),
@@ -765,7 +815,8 @@ app.post("/api/infra/nodes/:id/pve-guests/:kind/:vmid/control", requireRole("adm
   appendSystemLog(
     "info",
     nodeId,
-    `PVE ${kind} ${vmid} ('${guest.name}') signal '${signal}' dispatched.`
+    `PVE ${kind} ${vmid} ('${guest.name}') signal '${signal}' dispatched.`,
+    (res.locals.auth as { sub: string }).sub
   );
   res.json({
     success: true,
@@ -796,7 +847,8 @@ app.post("/api/infra/nodes/:id/regenerate-token", requireRole("admin"), (req, re
   appendSystemLog(
     "warning",
     req.params.id,
-    `Agent token regenerated by ${auth?.sub ?? "unknown"}.`
+    `Agent token regenerated by ${auth?.sub ?? "unknown"}.`,
+    auth?.sub ?? null
   );
   res.json({
     success: true,
@@ -833,7 +885,8 @@ app.post("/api/infra/containers/:id/auto-heal", requireRole("admin"), (req, res)
   appendSystemLog(
     "info",
     container.node_id,
-    `Auto-heal ${enabled ? "enabled" : "disabled"} for '${container.name}'.`
+    `Auto-heal ${enabled ? "enabled" : "disabled"} for '${container.name}'.`,
+    (res.locals.auth as { sub: string }).sub
   );
   res.json({ success: true, id: container.id, auto_heal: enabled });
 });
@@ -888,7 +941,7 @@ app.post("/api/gemini/diagnose", requireAuth, async (req, res) => {
       prompt,
       logs: typeof logs === "string" ? logs : undefined
     });
-    appendSystemLog("info", "GEMINI_COPILOT", `Diagnose called by ${auth.sub} (${prompt.length} chars).`);
+    appendSystemLog("info", "GEMINI_COPILOT", `Diagnose called by ${auth.sub} (${prompt.length} chars).`, auth.sub);
     res.json({ success: true, response: text });
   } catch (e) {
     if (isGeminiError(e)) {

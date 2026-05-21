@@ -79,7 +79,11 @@ export function LogStreamCard() {
                 {new Date(r.timestamp).toLocaleTimeString()}
               </span>{" "}
               <span className="uppercase">[{r.log_type}]</span>{" "}
-              <span className="text-cyan-300/80">{r.source}</span>: {r.message}
+              <span className="text-cyan-300/80">{r.source}</span>
+              {r.actor && (
+                <span className="text-emerald-300/80"> {"<"}{r.actor}{">"}</span>
+              )}
+              : {r.message}
             </div>
           ))
         )}

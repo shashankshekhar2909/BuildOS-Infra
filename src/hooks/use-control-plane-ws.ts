@@ -27,6 +27,7 @@ export type ControlPlaneEvent =
         log_type: string;
         source: string;
         message: string;
+        actor: string | null;
       };
     }
   | { event_type: "EMERGENCY_LOCKDOWN" | "EMERGENCY_RELEASED"; data: Record<string, unknown> };
