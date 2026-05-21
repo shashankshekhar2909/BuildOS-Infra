@@ -25,7 +25,7 @@ export default function EmergencyPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const h = await apiFetch<HealthResponse>("/api/health", { token });
+      const h = await apiFetch<HealthResponse>("/api/status", { token });
       setLocked(h.emergency_lockdown);
     } catch (e) {
       setError(e instanceof Error ? e.message : "health failed");

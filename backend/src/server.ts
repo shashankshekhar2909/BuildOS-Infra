@@ -64,7 +64,17 @@ import {
 const app = express();
 const rootDir = process.cwd();
 
-app.use(express.json());
+// Behind exactly one proxy (Cloudflare Tunnel / Caddy / Nginx). Make req.ip honor
+// X-Forwarded-For. CF sets CF-Connecting-IP, which we prefer where available.
+app.set("trust proxy", 1);
+
+app.use(express.json({ limit: "1mb" }));
+
+function clientIp(req: import("express").Request): string {
+  const cf = req.headers["cf-connecting-ip"];
+  if (typeof cf === "string" && cf.length > 0) return cf;
+  return req.ip ?? "unknown";
+}
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -92,7 +102,13 @@ function buildSshInstallerCommand(input: {
   return `ping -c 1 ${shellQuote(input.ipAddress)} || true && ssh ${shellQuote(`root@${input.ipAddress}`)} ${shellQuote(remoteInstall)}`;
 }
 
+// Public liveness probe — minimal surface for uptime checks.
 app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
+// Authenticated, richer view used by the dashboard.
+app.get("/api/status", requireAuth, (_req, res) => {
   res.json({
     status: "ok",
     phase: "phase-8",
@@ -155,8 +171,7 @@ const LOGIN_MAX_FAILS = 5;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 function loginKey(req: import("express").Request): string {
-  const fwd = (req.headers["x-forwarded-for"] as string | undefined) ?? "";
-  return (fwd.split(",")[0] || "").trim() || req.ip || "unknown";
+  return clientIp(req);
 }
 
 setInterval(() => {
@@ -823,7 +838,42 @@ app.post("/api/infra/containers/:id/auto-heal", requireRole("admin"), (req, res)
   res.json({ success: true, id: container.id, auto_heal: enabled });
 });
 
+// --- Gemini rate-limit (per-user, 10 calls per 60s rolling window).
+const geminiBuckets = new Map<string, number[]>();
+const GEMINI_LIMIT = 10;
+const GEMINI_WINDOW_MS = 60_000;
+
+function checkGeminiRate(userKey: string): { ok: true } | { ok: false; retryAfter: number } {
+  const now = Date.now();
+  const arr = geminiBuckets.get(userKey) ?? [];
+  const recent = arr.filter((t) => now - t < GEMINI_WINDOW_MS);
+  if (recent.length >= GEMINI_LIMIT) {
+    const oldest = recent[0];
+    return { ok: false, retryAfter: Math.ceil((GEMINI_WINDOW_MS - (now - oldest)) / 1000) };
+  }
+  recent.push(now);
+  geminiBuckets.set(userKey, recent);
+  return { ok: true };
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - GEMINI_WINDOW_MS;
+  for (const [k, arr] of geminiBuckets) {
+    const recent = arr.filter((t) => t >= cutoff);
+    if (recent.length === 0) geminiBuckets.delete(k);
+    else geminiBuckets.set(k, recent);
+  }
+}, 120_000).unref();
+
 app.post("/api/gemini/diagnose", requireAuth, async (req, res) => {
+  const auth = res.locals.auth as { sub: string };
+  const limit = checkGeminiRate(auth.sub);
+  if (!limit.ok) {
+    res.setHeader("Retry-After", String(limit.retryAfter));
+    res.status(429).json({ error: `Rate limit: ${GEMINI_LIMIT}/min. Retry in ${limit.retryAfter}s.` });
+    return;
+  }
+
   const { prompt, logs } = req.body ?? {};
   if (typeof prompt !== "string" || prompt.trim().length === 0) {
     res.status(400).json({ error: "prompt (string) is required" });
@@ -838,7 +888,7 @@ app.post("/api/gemini/diagnose", requireAuth, async (req, res) => {
       prompt,
       logs: typeof logs === "string" ? logs : undefined
     });
-    appendSystemLog("info", "GEMINI_COPILOT", `Diagnose called (${prompt.length} chars).`);
+    appendSystemLog("info", "GEMINI_COPILOT", `Diagnose called by ${auth.sub} (${prompt.length} chars).`);
     res.json({ success: true, response: text });
   } catch (e) {
     if (isGeminiError(e)) {
@@ -862,6 +912,22 @@ async function start(): Promise<void> {
     console.warn(
       "[BuildOS Infra] WARN: JWT_SECRET is still the default. Sessions are forgeable. Set a strong value in .env."
     );
+  }
+  try {
+    const adminUser = findUserByUsername(config.adminUsername);
+    if (adminUser && verifyPassword("admin", adminUser.password_hash)) {
+      console.warn(
+        `[BuildOS Infra] WARN: admin password is the default 'admin'. ` +
+          `Change it now via /users → set password.`
+      );
+      appendSystemLog(
+        "critical",
+        "AUTH",
+        `Default admin password detected at boot. Change immediately via /users.`
+      );
+    }
+  } catch {
+    // best effort; do not block boot
   }
   if (config.nodeEnv !== "production") {
     try {
