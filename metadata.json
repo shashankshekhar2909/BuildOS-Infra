@@ -1,0 +1,8 @@
+{
+  "name": "BuildOS Infra",
+  "description": "An AI-native operations control plane for multi-node Docker containers, Proxmox virtualization, and Cloudflare integrations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
