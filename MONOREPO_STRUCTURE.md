@@ -1,5 +1,7 @@
 # Ideal Monorepo Structure — BuildOS Infra
 
+> **Status: Aspirational / Future-state.** Phase 1 ships a single Next.js + Express repo (no `frontend/`/`backend/`/`agent/` split, no Python). Tree below describes the target shape once the project is extracted into a proper monorepo and the Python agent exists. See `README.md` § Project Layout for actual current layout.
+
 A highly structured, production-ready monorepo layout designed for a solo engineer to maintain high coordination across the control plane components.
 
 ---

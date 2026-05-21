@@ -1,0 +1,47 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: buildos_backend
+    environment:
+      APP_URL: ${APP_URL:-http://localhost:4225}
+      PORT: 8000
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-3600}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      VIEWER_USERNAME: ${VIEWER_USERNAME:-viewer}
+      VIEWER_PASSWORD: ${VIEWER_PASSWORD:-viewer}
+      DATABASE_PATH: ${DATABASE_PATH:-/app/data/buildos-infra.sqlite}
+      DEFAULT_AGENT_VERSION: ${DEFAULT_AGENT_VERSION:-v1.0.0}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    volumes:
+      - buildos_data:/app/data
+    ports:
+      - "8015:8000"
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_APP_BASE_URL: ${NEXT_PUBLIC_APP_BASE_URL:-http://localhost:4225}
+        BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
+    container_name: buildos_control_plane
+    environment:
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:4225}
+      NEXT_PUBLIC_APP_BASE_URL: ${NEXT_PUBLIC_APP_BASE_URL:-http://localhost:4225}
+      BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
+      PORT: 3000
+    depends_on:
+      - backend
+    ports:
+      - "4225:3000"
+
+volumes:
+  buildos_data:

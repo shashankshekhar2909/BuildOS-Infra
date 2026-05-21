@@ -1,6 +1,8 @@
 # Backend Specification — BuildOS Infra
 
-The FastAPI master backend manages incoming web UI commands, processes security checks, communicates with active remote agent channels, proxy Cloudflare pipelines, and hosts the AI operational co-pilot endpoints.
+> **Status: Aspirational / Future-state.** Phase 1 implementation is **Node.js + Express + TypeScript (tsx)**, not FastAPI/Python. See `README.md` and `backend/src/` for actual code. Endpoint paths and shapes here remain authoritative; runtime stack does not.
+
+The master backend manages incoming web UI commands, processes security checks, communicates with active remote agent channels, proxy Cloudflare pipelines, and hosts the AI operational co-pilot endpoints.
 
 ---
 
