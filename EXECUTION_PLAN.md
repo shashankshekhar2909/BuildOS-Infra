@@ -73,3 +73,35 @@ A step-by-step development strategy designed for a solo engineer to construct Bu
 - [x] `/containers` page: per-row "tail logs" toggle opens `ContainerLogTail` panel w/ live agent stdout.
 - [x] Master WS hub accepts inbound browser frames (`SUBSCRIBE_LOGS`/`UNSUBSCRIBE_LOGS`), maintains per-client `logSubs` set, refcounts forwarding to agents, cleans up on disconnect.
 - [x] Agent: on `SUBSCRIBE_LOGS`, starts asyncio task that reads docker log stream in executor; on `UNSUBSCRIBE_LOGS` (or disconnect), cancels task. Enforces `ALLOWED_CONTAINERS` allowlist on subscribe.
+
+## Phase 9: Proxmox Integration (PCT + VM lifecycle)
+- [x] Schema additions: `nodes.parent_node_id`, new `pve_guests (id, node_id, vmid, kind, name, state, cpu_pct, mem_pct, disk_pct, uptime_seconds, has_buildos_agent, child_node_id, updated_at, UNIQUE(node_id, vmid, kind))`. Indexed on `node_id`.
+- [x] Helpers: `upsertPveGuest`, `listPveGuests`, `findPveGuest`, `reconcileMissingPveGuests`.
+- [x] WS hub: `PVE_GUESTS` action upserts rows + reconciles missing + broadcasts `PVE_GUESTS_UPDATE`. `PVE_CONTROL` dispatched via existing `sendToAgent`.
+- [x] REST: `GET /api/infra/nodes/:id/pve-guests`, `POST /api/infra/nodes/:id/pve-guests/:kind/:vmid/control {signal:"start"|"stop"|"reboot"|"shutdown"}` (admin + lockdown-gated).
+- [x] Agent: `AGENT_MODE=docker|proxmox|hybrid` switch. `proxmoxer` w/ token auth (`PVE_TOKEN_ID` + `PVE_TOKEN_SECRET`). `collect_pve_guests` enumerates LXC + QEMU, computes cpu/mem/disk %. Heartbeat sends `PVE_GUESTS` frame.
+- [x] UI: `src/components/pve-guests-panel.tsx` lists guests w/ kind + vmid + name + state, CPU/MEM/DISK%, uptime, start/stop/reboot/shutdown actions for admins. Mounted inside Node detail drawer when `type === "PROXMOX"`.
+- [x] Env: `.env.example` + compose: `AGENT_MODE`, `PVE_HOST`, `PVE_USER`, `PVE_TOKEN_ID`, `PVE_TOKEN_SECRET`, `PVE_VERIFY_SSL`.
+- [ ] 9d: auto-install nested agent inside a PCT via `pct exec`.
+- [ ] 9e: snapshot management (`pct snapshot`, `qm snapshot`).
+- [ ] 9f: PCT/VM creation from templates.
+
+## UX rev1: Drawers + mobile + favicon
+- [x] `src/components/ui/drawer.tsx` — right-side slide-in panel on `lg+`, full-screen on mobile, backdrop + Esc, safe-area inset. Animated via `@keyframes drawerSlideIn` in `globals.css`.
+- [x] `NodeDetailDrawer` (`src/components/node-detail-drawer.tsx`) — replaces inline edit form. Holds details + edit + rotate-token + delete + nested `PveGuestsPanel`.
+- [x] `ContainerDetailDrawer` (`src/components/container-detail-drawer.tsx`) — replaces inline log/control row. Holds controls + auto-heal toggle + on-demand log tail.
+- [x] Mobile bottom-tab nav (`src/components/layout/mobile-nav.tsx`) for `<lg` viewports; existing sidebar stays for `lg+`.
+- [x] Compact header on mobile (truncated title, hide search placeholder).
+- [x] Single-column forms below `sm`, `h-11` touch targets.
+- [x] Favicon: `src/app/icon.svg` w/ cyan-gradient "BI" mark. `theme-color`, `applicationName`, `appleWebApp` metadata.
+
+## UX rev2: Fleet card + containers grouping
+- [x] `LiveFleetCard` redesign: per-node card w/ progress bars (CPU/RAM/DISK, color-graded at 75% / 90% thresholds), 1h sparkline trend strip, node-name resolution via `/api/infra/nodes`. Click-through → `/containers?node=<id>`.
+- [x] `/containers` rebuilt: server filter (dropdown of all registered nodes), state filter (Running / Stopped / Issues / All), free-text filter, "group by server" toggle (default on). Each group shows `running/total` running count.
+- [x] `?node=<id>` query param pre-selects the server filter (used by fleet card link).
+
+## Reconciliation + ops hygiene
+- [x] `reconcileMissingContainers(nodeId, presentIds)` — heartbeat handler flips orphan rows to `state="missing"` so the heal sweep stops looping on phantom containers (root-caused from a 90s heal-restart loop on a seeded `nginx-proxy` row that never existed on host).
+- [x] `POST /api/infra/containers/:id/control` returns HTTP 503 when target agent is offline (no more optimistic state writes).
+- [x] `SKIP_DEMO_SEED=true` env flag added (gates `seedDatabase()`); set after first cleanup so fresh DB rebuilds don't reintroduce demo nodes.
+- [x] First real fleet brought online: `homelab-host` (local Docker agent via `Dockerfile.agent` + Compose service) and `vps-01` Hetzner (Tailscale-routed agent via systemd `install.sh`).
