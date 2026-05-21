@@ -4,6 +4,13 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
 import { useAppAuth } from "@/components/auth/auth-provider";
 import { apiFetch } from "@/lib/api";
 import { PveGuestsPanel } from "@/components/pve-guests-panel";
@@ -191,15 +198,16 @@ export function NodeDetailDrawer({ node, onClose, onChanged }: Props) {
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
           />
-          <select
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}
-            className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
-          >
-            <option>VPS</option>
-            <option>HOMELAB</option>
-            <option>PROXMOX</option>
-          </select>
+          <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+            <SelectTrigger className="h-11 w-full rounded-xl border-white/10 bg-[var(--surface-2)] text-sm text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="VPS">VPS</SelectItem>
+              <SelectItem value="HOMELAB">HOMELAB</SelectItem>
+              <SelectItem value="PROXMOX">PROXMOX</SelectItem>
+            </SelectContent>
+          </Select>
           <input
             required
             placeholder="Provider"

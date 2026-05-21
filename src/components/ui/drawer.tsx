@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
-import { X } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription
+} from "@/components/ui/sheet";
 
 type DrawerProps = {
   open: boolean;
@@ -11,56 +17,30 @@ type DrawerProps = {
   children?: ReactNode;
 };
 
+/**
+ * Compat shim — keeps the legacy <Drawer> API while delegating to the
+ * Radix-backed shadcn <Sheet>. Provides focus trap, ARIA, esc-to-close,
+ * and animated entry/exit out of the box.
+ */
 export function Drawer({ open, onClose, title, subtitle, children }: DrawerProps) {
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
-  }, [open, onClose]);
-
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-      />
-      <aside
-        className="relative flex h-full w-full flex-col border-l border-white/10 bg-[#040810] shadow-2xl
-                   animate-[drawerSlideIn_180ms_ease-out]
-                   sm:w-[28rem] lg:w-[32rem] xl:w-[36rem]"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    <Sheet open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col gap-0 border-l border-white/10 bg-[var(--surface-3)] p-0 sm:max-w-[28rem] lg:max-w-[32rem] xl:max-w-[36rem]"
       >
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-white/10 bg-[rgba(2,6,23,0.85)] px-5 py-4 backdrop-blur">
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-base font-semibold text-white">{title}</div>
-            {subtitle && (
-              <div className="mt-0.5 truncate text-xs text-[var(--muted-foreground)]">
-                {subtitle}
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close panel"
-            className="rounded-xl border border-white/10 bg-white/5 p-2 text-[var(--muted-foreground)] hover:bg-white/10 hover:text-white"
-          >
-            <X className="size-4" />
-          </button>
-        </header>
+        <SheetHeader className="border-b border-white/10 bg-[rgba(2,6,23,0.85)] px-5 py-4 backdrop-blur">
+          <SheetTitle className="truncate text-base font-semibold text-white">
+            {title}
+          </SheetTitle>
+          {subtitle && (
+            <SheetDescription className="truncate text-xs text-[var(--muted-foreground)]">
+              {subtitle}
+            </SheetDescription>
+          )}
+        </SheetHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">{children}</div>
-      </aside>
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }

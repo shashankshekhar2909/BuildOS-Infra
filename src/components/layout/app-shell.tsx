@@ -17,8 +17,8 @@ export function AppShell({ pathname, title, subtitle, children }: AppShellProps)
         <AppSidebar pathname={pathname} />
         <div className="flex min-w-0 flex-1 flex-col">
           <AppHeader title={title} subtitle={subtitle} />
-          <main className="flex-1 px-3 pt-4 sm:px-4 sm:py-6 xl:px-8 pb-[calc(env(safe-area-inset-bottom)+5.5rem)] lg:pb-6">
-            <div className="w-full">{children}</div>
+          <main className="min-w-0 flex-1 overflow-x-hidden px-3 pt-4 sm:px-4 sm:py-6 xl:px-8 pb-[calc(env(safe-area-inset-bottom)+5.5rem)] lg:pb-6">
+            <div className="w-full min-w-0 max-w-full">{children}</div>
           </main>
         </div>
       </div>

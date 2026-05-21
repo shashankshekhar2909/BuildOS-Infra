@@ -1,14 +1,86 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
+@custom-variant dark (&:is(.dark *));
+
+/* ---------- Brand + semantic tokens ---------- */
 :root {
+  /* Surfaces */
   --background: #020617;
   --foreground: #f8fafc;
-  --card: rgba(15, 23, 42, 0.78);
+  --card: #08101d;
+  --card-foreground: #f8fafc;
+  --popover: #040810;
+  --popover-foreground: #f8fafc;
+
+  /* Brand */
+  --primary: #06b6d4;
+  --primary-foreground: #06222a;
+  --secondary: rgba(255, 255, 255, 0.06);
+  --secondary-foreground: #f8fafc;
+
+  /* Muted / accents */
+  --muted: rgba(255, 255, 255, 0.04);
   --muted-foreground: #94a3b8;
-  --accent: #06b6d4;
-  --accent-foreground: #06222a;
-  --ring: #67e8f9;
+  --accent: rgba(6, 182, 212, 0.12);
+  --accent-foreground: #67e8f9;
+
+  /* Status */
+  --destructive: #ef4444;
+  --destructive-foreground: #fef2f2;
+
+  /* Lines + focus */
   --border: rgba(148, 163, 184, 0.18);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #67e8f9;
+
+  /* Radii (shadcn convention: --radius is the base) */
+  --radius: 0.75rem;
+
+  /* App-specific surfaces (use sparingly outside semantic) */
+  --surface-1: rgba(255, 255, 255, 0.03);
+  --surface-2: #08101d;
+  --surface-3: #040810;
+
+  /* Charts */
+  --chart-1: #06b6d4;
+  --chart-2: #67e8f9;
+  --chart-3: #a5f3fc;
+  --chart-4: #f59e0b;
+  --chart-5: #ef4444;
+}
+
+/* Tailwind v4: bridge CSS vars to utility tokens */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
 * {
@@ -32,7 +104,26 @@ a {
   text-decoration: none;
 }
 
-@keyframes drawerSlideIn {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
+/* iOS Safari force-zooms when input font-size <16px. Prevent on mobile. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+html,
+body {
+  overflow-x: hidden;
+}
+
+/* ---------- Mobile overflow guards ----------
+   Grid + flex children default to `min-width: auto` which lets long
+   unbroken strings (container images, node IDs, IPs) push past the
+   parent and break mobile layout. Force `min-width: 0` so children
+   respect parent width and `truncate`/`break-words` actually apply.
+*/
+main .grid > * {
+  min-width: 0;
 }

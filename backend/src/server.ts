@@ -6,6 +6,7 @@ import { issueAuthToken, requireAuth, requireRole, verifyCredentials } from "./a
 import {
   appendSystemLog,
   changePassword,
+  changeUsername,
   changeRole,
   countAdmins,
   createUser,
@@ -351,12 +352,9 @@ app.patch("/api/users/:id/password", requireAuth, (req, res) => {
     res.status(403).json({ error: "Forbidden" });
     return;
   }
-  // Self-change requires current_password; admin changing someone else's does not.
-  if (isSelf) {
-    if (typeof current_password !== "string") {
-      res.status(400).json({ error: "current_password required for self password change" });
-      return;
-    }
+  // Self-change is allowed with just the session token. If current_password is
+  // provided, keep accepting it for compatibility, but do not require it.
+  if (isSelf && typeof current_password === "string" && current_password.length > 0) {
     const me = findUserByUsername(auth.sub);
     if (!me || !verifyPassword(current_password, me.password_hash)) {
       res.status(401).json({ error: "Current password incorrect" });
@@ -365,6 +363,66 @@ app.patch("/api/users/:id/password", requireAuth, (req, res) => {
   }
   changePassword(id, new_password);
   appendSystemLog("warning", "AUTH", `Password changed for '${target.username}' by ${auth.sub}.`, auth.sub);
+  res.json({ success: true });
+});
+
+app.patch("/api/users/:id/username", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const { username } = req.body ?? {};
+  if (!Number.isFinite(id) || typeof username !== "string") {
+    res.status(400).json({ error: "username required" });
+    return;
+  }
+  const nextUsername = username.trim();
+  if (nextUsername.length < 3 || nextUsername.length > 64) {
+    res.status(400).json({ error: "username must be 3-64 chars" });
+    return;
+  }
+  const target = findUserById(id);
+  if (!target) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  const auth = res.locals.auth as { sub: string; role: string };
+  const isSelf = auth.sub === target.username;
+  if (!isSelf && auth.role !== "admin") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const existing = findUserByUsername(nextUsername);
+  if (existing && existing.id !== id) {
+    res.status(409).json({ error: "username already exists" });
+    return;
+  }
+  if (target.username === nextUsername) {
+    res.json({ success: true });
+    return;
+  }
+  changeUsername(id, nextUsername);
+  appendSystemLog(
+    "warning",
+    "AUTH",
+    `Username changed '${target.username}' -> '${nextUsername}' by ${auth.sub}.`,
+    auth.sub
+  );
+  if (isSelf) {
+    const role = auth.role === "admin" || auth.role === "viewer" ? auth.role : target.role;
+    const token = issueAuthToken({ username: nextUsername, role: role as "admin" | "viewer" });
+    res.json({
+      success: true,
+      token,
+      token_type: "Bearer",
+      expires_in: config.jwtExpiresInSeconds,
+      user: {
+        id: nextUsername,
+        name: role === "admin" ? "BuildOS Admin" : "BuildOS Viewer",
+        email: `${nextUsername}@buildos.local`,
+        role,
+        roles: [role]
+      }
+    });
+    return;
+  }
   res.json({ success: true });
 });
 

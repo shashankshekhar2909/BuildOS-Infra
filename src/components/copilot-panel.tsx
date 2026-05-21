@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Badge } from "@/components/ui/badge";
+import { ChevronDown, ChevronUp, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppAuth } from "@/components/auth/auth-provider";
 import { apiFetch } from "@/lib/api";
@@ -11,17 +11,24 @@ type DiagnoseResponse = {
   response: string;
 };
 
+const QUICK_PROMPTS = [
+  { label: "What's broken?", value: "What's currently broken or degraded across the fleet? Cite the offending node/container." },
+  { label: "Why offline?", value: "Why is a node offline? Look at recent heartbeats and disconnect events." },
+  { label: "Restart loop?", value: "Find containers in a restart loop. Suggest root cause." },
+  { label: "Resource hot spots", value: "Which nodes are CPU/RAM/disk saturated? Recommend rebalancing." }
+];
+
 export function CopilotPanel() {
   const { token } = useAppAuth();
   const [prompt, setPrompt] = useState("");
   const [logs, setLogs] = useState("");
+  const [showLogs, setShowLogs] = useState(false);
   const [reply, setReply] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!prompt.trim()) return;
+  async function runDiagnose(promptText: string) {
+    if (!promptText.trim()) return;
     setBusy(true);
     setError(null);
     setReply(null);
@@ -29,7 +36,7 @@ export function CopilotPanel() {
       const res = await apiFetch<DiagnoseResponse>("/api/gemini/diagnose", {
         token,
         method: "POST",
-        body: { prompt, logs: logs || undefined }
+        body: { prompt: promptText, logs: logs || undefined }
       });
       setReply(res.response);
     } catch (err) {
@@ -39,33 +46,80 @@ export function CopilotPanel() {
     }
   }
 
+  async function submit(e?: React.FormEvent) {
+    e?.preventDefault();
+    await runDiagnose(prompt);
+  }
+
+  function runQuick(value: string) {
+    setPrompt(value);
+    void runDiagnose(value);
+  }
+
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.24em] text-cyan-200/70 sm:text-xs">AI co-pilot</div>
-          <h2 className="mt-1 text-lg font-semibold text-white sm:mt-2 sm:text-2xl">Diagnose with Gemini</h2>
-        </div>
-        <Badge variant="success">server-side</Badge>
+    <div className="min-w-0 max-w-full overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
+      <div className="flex items-center gap-2">
+        <Sparkles className="size-4 text-cyan-200" />
+        <h2 className="text-base font-semibold text-white sm:text-lg">AI co-pilot</h2>
+      </div>
+      <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+        Ask Gemini about the cluster. Logs are auto-attached server-side.
+      </p>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {QUICK_PROMPTS.map((q) => (
+          <button
+            key={q.label}
+            type="button"
+            onClick={() => runQuick(q.value)}
+            disabled={busy}
+            className="rounded-full border border-cyan-400/20 bg-cyan-400/5 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-400/40 hover:bg-cyan-400/10 disabled:opacity-40"
+          >
+            {q.label}
+          </button>
+        ))}
       </div>
 
-      <form onSubmit={submit} className="mt-4 space-y-3 sm:mt-6">
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="What's wrong with the cluster?"
-          rows={3}
-          maxLength={4000}
-          className="w-full rounded-xl border border-white/10 bg-[#08101d] px-3 py-2 text-sm text-white"
-        />
-        <textarea
-          value={logs}
-          onChange={(e) => setLogs(e.target.value)}
-          placeholder="Paste recent logs (optional, max ~8 KB used)"
-          rows={4}
-          className="w-full rounded-xl border border-white/10 bg-[#08101d] px-3 py-2 font-[family-name:var(--font-mono)] text-xs text-[var(--muted-foreground)]"
-        />
-        <Button type="submit" disabled={busy || !prompt.trim()} className="w-full sm:w-auto">
+      <form onSubmit={submit} className="mt-4 space-y-3">
+        <label className="block">
+          <span className="mb-1.5 block text-xs uppercase tracking-wider text-cyan-200/70">
+            Your question
+          </span>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="e.g. why is vps-01 spiking CPU?"
+            rows={3}
+            maxLength={4000}
+            className="block w-full min-w-0 max-w-full resize-y rounded-xl border border-white/10 bg-[var(--surface-2)] px-3 py-2.5 text-white placeholder:text-slate-500 focus:border-cyan-300/40 focus:outline-none"
+          />
+        </label>
+
+        <button
+          type="button"
+          onClick={() => setShowLogs((v) => !v)}
+          className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-[var(--surface-2)]/50 px-3 py-2 text-xs text-[var(--muted-foreground)] hover:text-white"
+        >
+          <span>{showLogs ? "Hide" : "Add"} extra log context (optional)</span>
+          {showLogs ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+        </button>
+
+        {showLogs && (
+          <textarea
+            value={logs}
+            onChange={(e) => setLogs(e.target.value)}
+            placeholder="Paste recent logs (max ~8 KB used)"
+            rows={5}
+            className="block w-full min-w-0 max-w-full resize-y rounded-xl border border-white/10 bg-[var(--surface-2)] px-3 py-2.5 font-[family-name:var(--font-mono)] text-xs text-slate-300 placeholder:text-slate-600 focus:border-cyan-300/40 focus:outline-none"
+          />
+        )}
+
+        <Button
+          type="submit"
+          disabled={busy || !prompt.trim()}
+          size="lg"
+          className="w-full"
+        >
           {busy ? "Diagnosing…" : "Ask Gemini"}
         </Button>
       </form>
@@ -77,8 +131,10 @@ export function CopilotPanel() {
       )}
 
       {reply && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-[#08101d] p-4 text-sm leading-7 text-slate-100 whitespace-pre-wrap">
-          {reply}
+        <div className="mt-4 max-w-full overflow-x-auto rounded-2xl border border-cyan-400/20 bg-cyan-500/5 p-4 text-sm leading-7 text-slate-100">
+          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            {reply}
+          </div>
         </div>
       )}
     </div>

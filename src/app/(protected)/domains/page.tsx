@@ -3,6 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
 import { useAppAuth } from "@/components/auth/auth-provider";
 import { apiFetch } from "@/lib/api";
 
@@ -190,7 +197,7 @@ export default function DomainsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
         <div className="flex items-center justify-between">
           <div>
@@ -218,18 +225,18 @@ export default function DomainsPage() {
         )}
 
         <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto]">
-          <select
-            value={selectedZoneId}
-            onChange={(e) => setSelectedZoneId(e.target.value)}
-            className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
-          >
-            {zones.length === 0 && <option value="">No zones configured</option>}
-            {zones.map((zone) => (
-              <option key={zone.id} value={zone.id}>
-                {zone.name} · {zone.id}
-              </option>
-            ))}
-          </select>
+          <Select value={selectedZoneId} onValueChange={setSelectedZoneId} disabled={zones.length === 0}>
+            <SelectTrigger className="h-11 w-full rounded-xl border-white/10 bg-[var(--surface-2)] text-sm text-white">
+              <SelectValue placeholder="No zones configured" />
+            </SelectTrigger>
+            <SelectContent>
+              {zones.map((zone) => (
+                <SelectItem key={zone.id} value={zone.id}>
+                  {zone.name} · {zone.id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {selectedZoneId && (
             <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#08101d] px-3 text-xs text-cyan-100">
               <span>
@@ -347,16 +354,17 @@ export default function DomainsPage() {
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
             />
-            <select
-              value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value })}
-              className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
-            >
-              <option>CNAME</option>
-              <option>A</option>
-              <option>AAAA</option>
-              <option>TXT</option>
-            </select>
+            <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+              <SelectTrigger className="h-11 w-full rounded-xl border-white/10 bg-[var(--surface-2)] text-sm text-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="CNAME">CNAME</SelectItem>
+                <SelectItem value="A">A</SelectItem>
+                <SelectItem value="AAAA">AAAA</SelectItem>
+                <SelectItem value="TXT">TXT</SelectItem>
+              </SelectContent>
+            </Select>
             <input
               required
               placeholder="tunnel.cfargotunnel.com"

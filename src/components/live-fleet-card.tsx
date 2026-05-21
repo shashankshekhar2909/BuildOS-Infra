@@ -65,7 +65,7 @@ function NodeCard({
   return (
     <Link
       href={`/containers?node=${encodeURIComponent(nodeId)}`}
-      className="group block rounded-2xl border border-white/10 bg-[#08101d] p-4 transition-colors hover:border-cyan-400/30 hover:bg-[#0a1424]"
+      className="group block min-w-0 max-w-full overflow-hidden rounded-2xl border border-white/10 bg-[#08101d] p-4 transition-colors hover:border-cyan-400/30 hover:bg-[#0a1424]"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -133,11 +133,17 @@ function NodeCard({
       </div>
 
       {cpuSeries.length > 0 && (
-        <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/5 pt-3">
-          <Sparkline values={cpuSeries} width={120} height={24} stroke="#67e8f9" />
-          <Sparkline values={ramSeries} width={120} height={24} stroke="#a5f3fc" />
-          <span className="text-[10px] uppercase tracking-wider text-cyan-200/50">
-            1h trend
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-3">
+          <div className="flex flex-1 items-center gap-2 overflow-hidden">
+            <span className="text-[10px] uppercase tracking-wider text-cyan-200/50">cpu</span>
+            <Sparkline values={cpuSeries} width={90} height={20} stroke="#67e8f9" />
+          </div>
+          <div className="flex flex-1 items-center gap-2 overflow-hidden">
+            <span className="text-[10px] uppercase tracking-wider text-cyan-200/50">ram</span>
+            <Sparkline values={ramSeries} width={90} height={20} stroke="#a5f3fc" />
+          </div>
+          <span className="hidden text-[10px] uppercase tracking-wider text-cyan-200/50 sm:inline">
+            1h
           </span>
         </div>
       )}
@@ -176,7 +182,7 @@ export function LiveFleetCard() {
   const onlineCount = entries.filter(([, n]) => n.online).length;
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
+    <div className="min-w-0 max-w-full overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.24em] text-cyan-200/70 sm:text-xs">
@@ -193,11 +199,19 @@ export function LiveFleetCard() {
 
       <div className="mt-6">
         {entries.length === 0 ? (
-          <p className="text-sm leading-7 text-[var(--muted-foreground)]">
-            No agents reporting yet. Register a node on /servers and install the agent.
-          </p>
+          <div className="rounded-2xl border border-dashed border-white/10 bg-[#08101d] p-6 text-center">
+            <p className="text-sm leading-7 text-[var(--muted-foreground)]">
+              No agents reporting yet.
+            </p>
+            <Link
+              href="/servers"
+              className="mt-3 inline-flex items-center gap-1 rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-400/20"
+            >
+              Register a node →
+            </Link>
+          </div>
         ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {entries.map(([nodeId, n]) => (
               <NodeCard
                 key={nodeId}

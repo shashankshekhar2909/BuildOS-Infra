@@ -50,6 +50,7 @@ type AuthContextValue = {
   isLoading: boolean;
   isAuthenticated: boolean;
   signIn: (input: LoginRequest) => Promise<AuthSession>;
+  replaceSession: (session: AuthSession) => void;
   signOut: () => void;
 };
 
@@ -177,6 +178,10 @@ export function AppAuthProvider({ children }: Readonly<{ children: ReactNode }>)
     setSession(null);
   }
 
+  function replaceSession(nextSession: AuthSession) {
+    setSession(nextSession);
+  }
+
   if (!isHydrated) {
     return <RouteLoading />;
   }
@@ -190,6 +195,7 @@ export function AppAuthProvider({ children }: Readonly<{ children: ReactNode }>)
         isLoading: isSigningIn,
         isAuthenticated: Boolean(session && session.expiresAt > Date.now()),
         signIn,
+        replaceSession,
         signOut
       }}
     >

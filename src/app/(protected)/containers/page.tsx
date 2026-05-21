@@ -3,6 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
 import { useAppAuth } from "@/components/auth/auth-provider";
 import { apiFetch } from "@/lib/api";
 import {
@@ -33,7 +40,7 @@ export default function ContainersPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [nodeFilter, setNodeFilter] = useState<string>(initialNode);
-  const [stateFilter, setStateFilter] = useState<string>("running");
+  const [stateFilter, setStateFilter] = useState<string>("all");
   const [groupByNode, setGroupByNode] = useState<boolean>(initialNode === "all");
 
   const load = useCallback(async () => {
@@ -90,13 +97,13 @@ export default function ContainersPage() {
 
   function renderCard(c: ContainerRecord) {
     return (
-      <li key={c.id}>
+      <li key={c.id} className="min-w-0">
         <button
           type="button"
           onClick={() => setSelectedId(c.id)}
-          className="block w-full rounded-2xl border border-white/10 bg-[#08101d] p-4 text-left transition-colors hover:border-cyan-400/30 hover:bg-[#0a1424]"
+          className="block w-full min-w-0 max-w-full overflow-hidden rounded-2xl border border-white/10 bg-[#08101d] p-4 text-left transition-colors hover:border-cyan-400/30 hover:bg-[#0a1424]"
         >
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-start justify-between gap-2">
             <div className="min-w-0 flex-1 truncate text-base font-semibold text-white">
               {c.name}
             </div>
@@ -108,6 +115,7 @@ export default function ContainersPage() {
                     ? "warning"
                     : "danger"
               }
+              className="shrink-0"
             >
               {c.state}
             </Badge>
@@ -118,13 +126,13 @@ export default function ContainersPage() {
           <div className="mt-2 truncate font-[family-name:var(--font-mono)] text-xs text-[var(--muted-foreground)]">
             {c.image}
           </div>
-          <div className="mt-3 flex items-center justify-between text-[10px] uppercase tracking-wider">
+          <div className="mt-3 flex min-w-0 items-center justify-between gap-2 text-[10px] uppercase tracking-wider">
             {c.auto_heal === 1 ? (
-              <span className="text-emerald-400">auto-heal</span>
+              <span className="truncate text-emerald-400">auto-heal</span>
             ) : (
-              <span className="text-[var(--muted-foreground)]">manual</span>
+              <span className="truncate text-[var(--muted-foreground)]">manual</span>
             )}
-            <span className="text-cyan-200/70">open →</span>
+            <span className="shrink-0 text-cyan-200/70">open →</span>
           </div>
         </button>
       </li>
@@ -132,8 +140,8 @@ export default function ContainersPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
+    <div className="min-w-0 max-w-full space-y-6">
+      <div className="min-w-0 max-w-full overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-white">Containers</h2>
@@ -153,29 +161,31 @@ export default function ContainersPage() {
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr]">
-          <select
-            value={nodeFilter}
-            onChange={(e) => setNodeFilter(e.target.value)}
-            className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
-          >
-            <option value="all">All servers ({nodes.length})</option>
-            {nodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.name} {n.status === "online" ? "·  online" : "·  offline"}
-              </option>
-            ))}
-          </select>
-          <select
-            value={stateFilter}
-            onChange={(e) => setStateFilter(e.target.value)}
-            className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
-          >
-            {STATE_GROUPS.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.label}
-              </option>
-            ))}
-          </select>
+          <Select value={nodeFilter} onValueChange={setNodeFilter}>
+            <SelectTrigger className="h-11 w-full rounded-xl border-white/10 bg-[var(--surface-2)] text-sm text-white">
+              <SelectValue placeholder="All servers" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All servers ({nodes.length})</SelectItem>
+              {nodes.map((n) => (
+                <SelectItem key={n.id} value={n.id}>
+                  {n.name} · {n.status}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={stateFilter} onValueChange={setStateFilter}>
+            <SelectTrigger className="h-11 w-full rounded-xl border-white/10 bg-[var(--surface-2)] text-sm text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATE_GROUPS.map((g) => (
+                <SelectItem key={g.id} value={g.id}>
+                  {g.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <input

@@ -25,20 +25,24 @@ export function MobileNav({ pathname }: MobileNavProps) {
               <Link
                 href={item.href}
                 aria-current={isActive ? "page" : undefined}
+                aria-label={item.label}
+                title={item.label}
                 className={cn(
-                  "flex flex-col items-center justify-center gap-1 py-2 text-[10px] font-medium",
+                  "flex flex-col items-center justify-center gap-0.5 px-1 py-2 text-[9px] font-medium leading-tight",
                   isActive ? "text-cyan-200" : "text-[var(--muted-foreground)]"
                 )}
               >
                 <span
                   className={cn(
-                    "flex size-9 items-center justify-center rounded-xl transition-colors",
+                    "flex size-8 items-center justify-center rounded-xl transition-colors",
                     isActive ? "bg-cyan-400/15" : ""
                   )}
                 >
-                  <Icon className="size-5" />
+                  <Icon className="size-[18px]" />
                 </span>
-                <span className="uppercase tracking-wider">{item.label}</span>
+                <span className="hidden truncate uppercase tracking-wider [@media(min-width:380px)]:block">
+                  {item.label}
+                </span>
               </Link>
             </li>
           );

@@ -822,6 +822,10 @@ const updatePasswordStmt = db.prepare(`
   UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
 `);
 
+const updateUsernameStmt = db.prepare(`
+  UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+`);
+
 const updateRoleStmt = db.prepare(`
   UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
 `);
@@ -867,6 +871,10 @@ export function createUser(input: {
 
 export function changePassword(userId: number, newPassword: string): void {
   updatePasswordStmt.run(hashPassword(newPassword), userId);
+}
+
+export function changeUsername(userId: number, username: string): void {
+  updateUsernameStmt.run(username, userId);
 }
 
 export function changeRole(userId: number, role: "admin" | "viewer"): void {

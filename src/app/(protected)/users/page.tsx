@@ -5,6 +5,13 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
 import { useAppAuth } from "@/components/auth/auth-provider";
 import { apiFetch } from "@/lib/api";
 
@@ -19,10 +26,11 @@ type User = {
 type DrawerMode =
   | { kind: "create" }
   | { kind: "edit"; user: User }
+  | { kind: "username"; user: User }
   | { kind: "password"; user: User };
 
 export default function UsersPage() {
-  const { token, user: me } = useAppAuth();
+  const { token, user: me, replaceSession } = useAppAuth();
   const isAdmin = me?.role === "admin";
   const [users, setUsers] = useState<User[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +91,7 @@ export default function UsersPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -124,6 +132,13 @@ export default function UsersPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setDrawer({ kind: "username", user: u })}
+                  >
+                    rename
+                  </Button>
                   <Button
                     size="sm"
                     variant="outline"
@@ -177,6 +192,16 @@ export default function UsersPage() {
           token={token}
         />
       )}
+
+      {drawer?.kind === "username" && (
+        <RenameUserDrawer
+          user={drawer.user}
+          onClose={() => setDrawer(null)}
+          onDone={() => setDrawer(null)}
+          token={token}
+          replaceSession={replaceSession}
+        />
+      )}
     </div>
   );
 }
@@ -222,6 +247,7 @@ function CreateUserDrawer({
           placeholder="username"
           value={form.username}
           onChange={(e) => setForm({ ...form, username: e.target.value })}
+          autoComplete="off"
           className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
         />
         <input
@@ -231,18 +257,21 @@ function CreateUserDrawer({
           placeholder="password (>=8 chars)"
           value={form.password}
           onChange={(e) => setForm({ ...form, password: e.target.value })}
+          autoComplete="off"
           className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
         />
-        <select
+        <Select
           value={form.role}
-          onChange={(e) =>
-            setForm({ ...form, role: e.target.value as "admin" | "viewer" })
-          }
-          className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
+          onValueChange={(v) => setForm({ ...form, role: v as "admin" | "viewer" })}
         >
-          <option value="viewer">viewer</option>
-          <option value="admin">admin</option>
-        </select>
+          <SelectTrigger className="h-11 w-full rounded-xl border-white/10 bg-[var(--surface-2)] text-sm text-white">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="viewer">viewer</SelectItem>
+            <SelectItem value="admin">admin</SelectItem>
+          </SelectContent>
+        </Select>
         {error && (
           <div className="rounded-xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200">
             {error}
@@ -312,6 +341,7 @@ function SetPasswordDrawer({
             value={pwd}
             onChange={(e) => setPwd(e.target.value)}
             autoFocus
+            autoComplete="off"
             className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
           />
           {error && (
@@ -331,6 +361,111 @@ function SetPasswordDrawer({
             User's existing JWT remains valid until expiry (default 1h). They will need the new
             password on next login.
           </p>
+        </form>
+      )}
+    </Drawer>
+  );
+}
+
+function RenameUserDrawer({
+  user,
+  onClose,
+  onDone,
+  token,
+  replaceSession
+}: {
+  user: User;
+  onClose: () => void;
+  onDone: () => void;
+  token: string | null;
+  replaceSession: ReturnType<typeof useAppAuth>["replaceSession"];
+}) {
+  const [username, setUsername] = useState(user.username);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await apiFetch<{
+        success: boolean;
+        token?: string;
+        token_type?: string;
+        expires_in?: number;
+        user?: {
+          id: string;
+          name: string;
+          email: string;
+          role: "admin" | "viewer";
+          roles: Array<"admin" | "viewer">;
+        };
+      }>(`/api/users/${user.id}/username`, {
+        token,
+        method: "PATCH",
+        body: { username }
+      });
+      if (response.token && response.user && response.expires_in) {
+        replaceSession({
+          token: response.token,
+          tokenType: "Bearer",
+          expiresAt: Date.now() + response.expires_in * 1000,
+          user: {
+            ...response.user,
+            initials: response.user.name
+              ? response.user.name
+                  .split(" ")
+                  .map((part) => part[0])
+                  .join("")
+                  .slice(0, 2)
+                  .toUpperCase()
+              : response.user.email.slice(0, 2).toUpperCase()
+          }
+        });
+      }
+      setDone(true);
+      setTimeout(onDone, 1200);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Drawer open={true} onClose={onClose} title={`Rename user — ${user.username}`}>
+      {done ? (
+        <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+          Username updated.
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-3">
+          <input
+            required
+            minLength={3}
+            maxLength={64}
+            type="text"
+            placeholder="new username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+            className="h-11 w-full rounded-xl border border-white/10 bg-[#08101d] px-3 text-sm text-white"
+          />
+          {error && (
+            <div className="rounded-xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200">
+              {error}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy ? "Saving…" : "Update username"}
+            </Button>
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+          </div>
         </form>
       )}
     </Drawer>
