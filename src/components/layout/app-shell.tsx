@@ -18,7 +18,7 @@ export function AppShell({ pathname, title, subtitle, children }: AppShellProps)
         <div className="flex min-w-0 flex-1 flex-col">
           <AppHeader title={title} subtitle={subtitle} />
           <main className="flex-1 px-3 pt-4 sm:px-4 sm:py-6 xl:px-8 pb-[calc(env(safe-area-inset-bottom)+5.5rem)] lg:pb-6">
-            <div className="mx-auto w-full max-w-6xl">{children}</div>
+            <div className="w-full">{children}</div>
           </main>
         </div>
       </div>
