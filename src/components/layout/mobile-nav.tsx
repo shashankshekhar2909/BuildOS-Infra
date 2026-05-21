@@ -15,7 +15,7 @@ export function MobileNav({ pathname }: MobileNavProps) {
       className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-[rgba(2,6,23,0.92)] backdrop-blur lg:hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <ul className="grid grid-cols-5">
+      <ul className="grid grid-cols-6">
         {navigationItems.map((item) => {
           const isActive =
             pathname === item.href || pathname.startsWith(`${item.href}/`);

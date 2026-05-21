@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import type { NextFunction, Request, Response } from "express";
 import { config } from "./config.js";
+import { findUserByUsername, verifyPassword } from "./database.js";
 
 export type AppRole = "admin" | "viewer";
 
@@ -92,13 +93,26 @@ export function verifyAuthToken(token: string): JwtPayload | null {
   }
 }
 
-export function verifyCredentials(role: AppRole, username: string, password: string): boolean {
-  if (role === "admin") {
-    return safeEqualString(username, config.adminUsername) && safeEqualString(password, config.adminPassword);
+// `role` is now informational: DB-stored user's actual role overrides the request's
+// declared role. Returns the user's true role on success, null on failure.
+export function verifyCredentials(
+  _requestedRole: AppRole,
+  username: string,
+  password: string
+): { role: AppRole; userId: number } | null {
+  if (typeof username !== "string" || typeof password !== "string") return null;
+  const user = findUserByUsername(username);
+  if (!user) {
+    // Constant-time-ish dummy hash to avoid revealing user existence via timing.
+    verifyPassword(password, "$argon2id$v=19$m=19456,t=2,p=1$YWJjZGVmZ2hpamtsbW5vcA$dummy");
+    return null;
   }
-
-  return safeEqualString(username, config.viewerUsername) && safeEqualString(password, config.viewerPassword);
+  if (!verifyPassword(password, user.password_hash)) return null;
+  return { role: user.role, userId: user.id };
 }
+
+// Backwards-compat helper for legacy safeEqual usage on creds (kept exported in case).
+export { safeEqualString };
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const authorization = req.headers.authorization;

@@ -4,7 +4,16 @@ import { config } from "./config.js";
 import { issueAuthToken, requireAuth, requireRole, verifyCredentials } from "./auth.js";
 import {
   appendSystemLog,
+  changePassword,
+  changeRole,
+  countAdmins,
+  createUser,
   createSecureAgentToken,
+  deleteUser,
+  findUserById,
+  findUserByUsername,
+  listUsers,
+  verifyPassword,
   deleteDnsRecord as deleteDnsRecordRow,
   deleteNode,
   findContainer,
@@ -139,7 +148,34 @@ function rejectIfLocked(res: import("express").Response): boolean {
   return false;
 }
 
+// --- Login rate limiter (in-memory, per-IP, 5 fails / 15 min).
+type RateBucket = { fails: number; lockedUntil: number };
+const loginBuckets = new Map<string, RateBucket>();
+const LOGIN_MAX_FAILS = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+
+function loginKey(req: import("express").Request): string {
+  const fwd = (req.headers["x-forwarded-for"] as string | undefined) ?? "";
+  return (fwd.split(",")[0] || "").trim() || req.ip || "unknown";
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, b] of loginBuckets) {
+    if (b.lockedUntil < now && b.fails === 0) loginBuckets.delete(k);
+  }
+}, 60_000).unref();
+
 app.post("/api/auth/login", (req, res) => {
+  const key = loginKey(req);
+  const bucket = loginBuckets.get(key) ?? { fails: 0, lockedUntil: 0 };
+  if (bucket.lockedUntil > Date.now()) {
+    const retryAfterSec = Math.ceil((bucket.lockedUntil - Date.now()) / 1000);
+    res.setHeader("Retry-After", String(retryAfterSec));
+    res.status(429).json({ error: `Too many attempts. Retry in ${retryAfterSec}s.` });
+    return;
+  }
+
   const { username, password, role } = req.body ?? {};
 
   if ((role !== "admin" && role !== "viewer") || typeof username !== "string" || typeof password !== "string") {
@@ -147,12 +183,25 @@ app.post("/api/auth/login", (req, res) => {
     return;
   }
 
-  if (!verifyCredentials(role, username, password)) {
+  const verified = verifyCredentials(role, username, password);
+  if (!verified) {
+    bucket.fails += 1;
+    if (bucket.fails >= LOGIN_MAX_FAILS) {
+      bucket.lockedUntil = Date.now() + LOGIN_WINDOW_MS;
+      bucket.fails = 0;
+      appendSystemLog("warning", "AUTH", `Login lockout for ${key} (${LOGIN_WINDOW_MS / 60000}m).`);
+    }
+    loginBuckets.set(key, bucket);
     res.status(401).json({ error: "Invalid credentials" });
     return;
   }
 
-  const token = issueAuthToken({ username, role });
+  loginBuckets.delete(key);
+
+  // DB role wins over requested role.
+  const actualRole = verified.role;
+  const token = issueAuthToken({ username, role: actualRole });
+  appendSystemLog("info", "AUTH", `User '${username}' logged in (${actualRole}).`);
   res.json({
     success: true,
     token,
@@ -160,12 +209,145 @@ app.post("/api/auth/login", (req, res) => {
     expires_in: config.jwtExpiresInSeconds,
     user: {
       id: username,
-      name: role === "admin" ? "BuildOS Admin" : "BuildOS Viewer",
+      name: actualRole === "admin" ? "BuildOS Admin" : "BuildOS Viewer",
       email: `${username}@buildos.local`,
-      role,
-      roles: [role]
+      role: actualRole,
+      roles: [actualRole]
     }
   });
+});
+
+// --- User management routes (mounted before /api/infra requireAuth so we keep
+// our own requireAuth on each handler). ---
+
+app.get("/api/auth/me", requireAuth, (_req, res) => {
+  const auth = res.locals.auth as { sub: string; role: string };
+  const user = findUserByUsername(auth.sub);
+  if (!user) {
+    res.status(404).json({ error: "Session user no longer exists" });
+    return;
+  }
+  res.json({
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    created_at: user.created_at,
+    updated_at: user.updated_at
+  });
+});
+
+app.get("/api/users", requireRole("admin"), (_req, res) => {
+  res.json(listUsers());
+});
+
+app.post("/api/users", requireRole("admin"), (req, res) => {
+  const { username, password, role } = req.body ?? {};
+  if (
+    typeof username !== "string" ||
+    typeof password !== "string" ||
+    (role !== "admin" && role !== "viewer")
+  ) {
+    res.status(400).json({ error: "username, password, role(admin|viewer) required" });
+    return;
+  }
+  if (username.length < 3 || username.length > 64) {
+    res.status(400).json({ error: "username must be 3-64 chars" });
+    return;
+  }
+  if (password.length < 8) {
+    res.status(400).json({ error: "password must be >=8 chars" });
+    return;
+  }
+  if (findUserByUsername(username)) {
+    res.status(409).json({ error: "username already exists" });
+    return;
+  }
+  const actor = (res.locals.auth as { sub: string }).sub;
+  const created = createUser({ username, password, role });
+  appendSystemLog("info", "AUTH", `User '${username}' (${role}) created by ${actor}.`);
+  res.status(201).json(created);
+});
+
+app.patch("/api/users/:id/role", requireRole("admin"), (req, res) => {
+  const id = Number(req.params.id);
+  const role = req.body?.role;
+  if (!Number.isFinite(id) || (role !== "admin" && role !== "viewer")) {
+    res.status(400).json({ error: "id + role required" });
+    return;
+  }
+  const user = findUserById(id);
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  if (user.role === "admin" && role === "viewer" && countAdmins() <= 1) {
+    res.status(400).json({ error: "Cannot demote the last admin." });
+    return;
+  }
+  const actor = (res.locals.auth as { sub: string }).sub;
+  changeRole(id, role);
+  appendSystemLog("warning", "AUTH", `User '${user.username}' role -> ${role} by ${actor}.`);
+  res.json({ success: true });
+});
+
+app.patch("/api/users/:id/password", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const { current_password, new_password } = req.body ?? {};
+  if (!Number.isFinite(id) || typeof new_password !== "string" || new_password.length < 8) {
+    res.status(400).json({ error: "new_password (>=8 chars) required" });
+    return;
+  }
+  const target = findUserById(id);
+  if (!target) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  const auth = res.locals.auth as { sub: string; role: string };
+  const isSelf = auth.sub === target.username;
+  if (!isSelf && auth.role !== "admin") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  // Self-change requires current_password; admin changing someone else's does not.
+  if (isSelf) {
+    if (typeof current_password !== "string") {
+      res.status(400).json({ error: "current_password required for self password change" });
+      return;
+    }
+    const me = findUserByUsername(auth.sub);
+    if (!me || !verifyPassword(current_password, me.password_hash)) {
+      res.status(401).json({ error: "Current password incorrect" });
+      return;
+    }
+  }
+  changePassword(id, new_password);
+  appendSystemLog("warning", "AUTH", `Password changed for '${target.username}' by ${auth.sub}.`);
+  res.json({ success: true });
+});
+
+app.delete("/api/users/:id", requireRole("admin"), (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  const target = findUserById(id);
+  if (!target) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  const auth = res.locals.auth as { sub: string };
+  if (target.username === auth.sub) {
+    res.status(400).json({ error: "Cannot delete yourself." });
+    return;
+  }
+  if (target.role === "admin" && countAdmins() <= 1) {
+    res.status(400).json({ error: "Cannot delete the last admin." });
+    return;
+  }
+  deleteUser(id);
+  appendSystemLog("warning", "AUTH", `User '${target.username}' deleted by ${auth.sub}.`);
+  res.json({ success: true });
 });
 
 app.use("/api/infra", requireAuth);
@@ -670,6 +852,17 @@ app.post("/api/gemini/diagnose", requireAuth, async (req, res) => {
 });
 
 async function start(): Promise<void> {
+  if (config.nodeEnv === "production" && config.jwtSecret === "change-me-in-production") {
+    console.error(
+      "[BuildOS Infra] FATAL: JWT_SECRET is the default. Set a strong value in .env before running in production."
+    );
+    process.exit(1);
+  }
+  if (config.jwtSecret === "change-me-in-production") {
+    console.warn(
+      "[BuildOS Infra] WARN: JWT_SECRET is still the default. Sessions are forgeable. Set a strong value in .env."
+    );
+  }
   if (config.nodeEnv !== "production") {
     try {
       const { createServer: createViteServer } = await import("vite");

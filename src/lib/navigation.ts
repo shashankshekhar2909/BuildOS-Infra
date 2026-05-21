@@ -4,7 +4,8 @@ import {
   Boxes,
   Globe,
   LayoutDashboard,
-  Server
+  Server,
+  Users
 } from "lucide-react";
 
 export type NavigationItem = {
@@ -19,6 +20,7 @@ export const protectedRoutes = [
   "/servers",
   "/containers",
   "/domains",
+  "/users",
   "/emergency"
 ] as const;
 
@@ -46,6 +48,12 @@ export const navigationItems: NavigationItem[] = [
     label: "Domains",
     icon: Globe,
     description: "Public edge routing and DNS mappings."
+  },
+  {
+    href: "/users",
+    label: "Users",
+    icon: Users,
+    description: "Operator accounts and password management."
   },
   {
     href: "/emergency",

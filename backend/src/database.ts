@@ -127,6 +127,15 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_node_metrics_node_time
     ON node_metrics (node_id, timestamp DESC);
+
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL CHECK (role IN ('admin','viewer')),
+    password_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Lightweight column migrations for older DBs.
@@ -199,6 +208,19 @@ const ARGON2_OPTS = { algorithm: Algorithm.Argon2id, memoryCost: 19_456, timeCos
 
 function hashToken(token: string): string {
   return argon2HashSync(token, ARGON2_OPTS);
+}
+
+export function hashPassword(password: string): string {
+  return argon2HashSync(password, ARGON2_OPTS);
+}
+
+export function verifyPassword(plain: string, stored: string): boolean {
+  if (!stored.startsWith("$argon2")) return false;
+  try {
+    return argon2VerifySync(stored, plain);
+  } catch {
+    return false;
+  }
 }
 
 function legacySha256(token: string): string {
@@ -768,3 +790,105 @@ export function appendSystemLog(logType: string, source: string, message: string
     }
   }
 }
+
+// --- User management ---
+
+export type UserRow = {
+  id: number;
+  username: string;
+  role: "admin" | "viewer";
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserWithHash = UserRow & { password_hash: string };
+
+const insertUserStmt = db.prepare(`
+  INSERT INTO users (username, role, password_hash) VALUES (?, ?, ?)
+`);
+
+const updatePasswordStmt = db.prepare(`
+  UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+`);
+
+const updateRoleStmt = db.prepare(`
+  UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+`);
+
+const deleteUserStmt = db.prepare(`DELETE FROM users WHERE id = ?`);
+
+export function listUsers(): UserRow[] {
+  return db
+    .prepare(`SELECT id, username, role, created_at, updated_at FROM users ORDER BY id ASC`)
+    .all() as UserRow[];
+}
+
+export function findUserByUsername(username: string): UserWithHash | undefined {
+  return db
+    .prepare(
+      `SELECT id, username, role, password_hash, created_at, updated_at FROM users WHERE username = ?`
+    )
+    .get(username) as UserWithHash | undefined;
+}
+
+export function findUserById(id: number): UserWithHash | undefined {
+  return db
+    .prepare(
+      `SELECT id, username, role, password_hash, created_at, updated_at FROM users WHERE id = ?`
+    )
+    .get(id) as UserWithHash | undefined;
+}
+
+export function createUser(input: {
+  username: string;
+  role: "admin" | "viewer";
+  password: string;
+}): UserRow {
+  const result = insertUserStmt.run(input.username, input.role, hashPassword(input.password));
+  const id = Number(result.lastInsertRowid);
+  const row = findUserById(id);
+  if (!row) throw new Error("User insert failed");
+  // Strip hash before returning.
+  const { password_hash: _ph, ...rest } = row;
+  void _ph;
+  return rest;
+}
+
+export function changePassword(userId: number, newPassword: string): void {
+  updatePasswordStmt.run(hashPassword(newPassword), userId);
+}
+
+export function changeRole(userId: number, role: "admin" | "viewer"): void {
+  updateRoleStmt.run(role, userId);
+}
+
+export function deleteUser(id: number): void {
+  deleteUserStmt.run(id);
+}
+
+export function countAdmins(): number {
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM users WHERE role = 'admin'`).get() as {
+    count: number;
+  };
+  return row.count;
+}
+
+function bootstrapUsers(): void {
+  const total = (db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number })
+    .count;
+  if (total > 0) return;
+
+  // Seed first admin + viewer from env so existing access keeps working.
+  insertUserStmt.run(
+    config.adminUsername,
+    "admin",
+    hashPassword(config.adminPassword)
+  );
+  insertUserStmt.run(
+    config.viewerUsername,
+    "viewer",
+    hashPassword(config.viewerPassword)
+  );
+}
+
+bootstrapUsers();
