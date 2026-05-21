@@ -23,12 +23,12 @@ export default function DashboardPage() {
       <LogStreamCard />
       <CopilotPanel />
 
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid gap-3 sm:grid-cols-3">
         {topMetrics.map((metric) => (
-          <div key={metric.label} className="rounded-3xl border border-white/10 bg-white/[0.03] p-5">
-            <div className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">{metric.label}</div>
-            <div className="mt-4 text-4xl font-semibold text-white">{metric.value}</div>
-            <div className="mt-3 text-sm text-[var(--muted-foreground)]">{metric.delta}</div>
+          <div key={metric.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:p-5">
+            <div className="text-[10px] uppercase tracking-[0.24em] text-cyan-200/70 sm:text-xs">{metric.label}</div>
+            <div className="mt-2 text-3xl font-semibold text-white sm:mt-4 sm:text-4xl">{metric.value}</div>
+            <div className="mt-2 text-xs text-[var(--muted-foreground)] sm:mt-3 sm:text-sm">{metric.delta}</div>
           </div>
         ))}
       </section>

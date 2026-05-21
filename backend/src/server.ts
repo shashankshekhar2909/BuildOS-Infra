@@ -6,16 +6,21 @@ import {
   appendSystemLog,
   createSecureAgentToken,
   deleteDnsRecord as deleteDnsRecordRow,
+  deleteNode,
   findContainer,
+  findDnsRecord,
+  findNodeById,
   generateNodeId,
   getSystemState,
   insertNode,
   isEmergencyLocked,
   listContainers,
   listDnsRecords as listDnsRecordsRows,
+  findPveGuest,
   listHealCandidates,
   listNodeMetrics,
   listNodes,
+  listPveGuests,
   listRecentLogs,
   markHealAttempt,
   onSystemLog,
@@ -24,14 +29,19 @@ import {
   setContainerAutoHeal,
   setSystemState,
   updateContainerState,
+  updateNode,
+  upsertCloudflareZone,
   upsertDnsRecord
 } from "./database.js";
 import {
   cloudflareConfigured,
   createDnsRecord as cfCreateDns,
   deleteDnsRecord as cfDeleteDns,
+  getCloudflareZone as cfGetZone,
   isCloudflareError,
-  listDnsRecords as cfListDns
+  listCloudflareZones as cfListCloudflareZones,
+  listDnsRecords as cfListDns,
+  resolveCloudflareZone
 } from "./cloudflare.js";
 import { diagnose as geminiDiagnose, geminiConfigured, isGeminiError } from "./gemini.js";
 import {
@@ -47,6 +57,32 @@ const rootDir = process.cwd();
 
 app.use(express.json());
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildInstallerCommand(input: {
+  token: string;
+  nodeId: string;
+  masterUrl: string;
+  ipAddress: string;
+}): string {
+  return [
+    `ping -c 1 ${shellQuote(input.ipAddress)} || true`,
+    `curl -sSL https://get.buildos.io/install.sh | bash -s -- --token ${shellQuote(input.token)} --node-id ${shellQuote(input.nodeId)} --master ${shellQuote(input.masterUrl)}`
+  ].join(" && ");
+}
+
+function buildSshInstallerCommand(input: {
+  token: string;
+  nodeId: string;
+  masterUrl: string;
+  ipAddress: string;
+}): string {
+  const remoteInstall = `curl -sSL https://get.buildos.io/install.sh | bash -s -- --token ${shellQuote(input.token)} --node-id ${shellQuote(input.nodeId)} --master ${shellQuote(input.masterUrl)}`;
+  return `ping -c 1 ${shellQuote(input.ipAddress)} || true && ssh ${shellQuote(`root@${input.ipAddress}`)} ${shellQuote(remoteInstall)}`;
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
@@ -56,6 +92,41 @@ app.get("/api/health", (_req, res) => {
     gemini: geminiConfigured() ? "configured" : "unconfigured",
     emergency_lockdown: getSystemState("emergency_lockdown") === "TRUE"
   });
+});
+
+app.get("/api/cloudflare/zones", requireAuth, (_req, res) => {
+  res.json({
+    configured: cloudflareConfigured(),
+    zones: cfListCloudflareZones()
+  });
+});
+
+app.get("/api/cloudflare/zones/:id/check", requireAuth, async (req, res) => {
+  try {
+    const zone = await cfGetZone(req.params.id);
+    res.json({ success: true, zone });
+  } catch (e) {
+    if (isCloudflareError(e)) {
+      const message =
+        e.status === 401 || e.status === 403
+          ? "Cloudflare token cannot access this zone. Use a token scoped to the zone or add this zone to the token permissions."
+          : e.message;
+      res.status(e.status).json({ error: message });
+      return;
+    }
+    res.status(500).json({ error: "Cloudflare zone check failed" });
+  }
+});
+
+app.post("/api/cloudflare/zones", requireRole("admin"), (req, res) => {
+  const { id, name } = req.body ?? {};
+  if (typeof id !== "string" || typeof name !== "string") {
+    res.status(400).json({ error: "id and name are required strings" });
+    return;
+  }
+  upsertCloudflareZone({ id, name });
+  appendSystemLog("info", "CLOUDFLARE_ENGINE", `Cloudflare zone saved: ${name} (${id}).`);
+  res.status(201).json({ success: true, zones: cfListCloudflareZones() });
 });
 
 function rejectIfLocked(res: import("express").Response): boolean {
@@ -143,8 +214,64 @@ app.post("/api/infra/nodes/register", requireRole("admin"), (req, res) => {
     success: true,
     node_id: nodeId,
     secure_token: plainToken,
-    download_installer_cmd: `curl -sSL https://get.buildos.io/install.sh | bash -s -- --token ${plainToken} --master ${masterUrl}`
+    download_installer_cmd: buildInstallerCommand({
+      token: plainToken,
+      nodeId,
+      masterUrl,
+      ipAddress: ip_address
+    }),
+    ssh_installer_cmd: buildSshInstallerCommand({
+      token: plainToken,
+      nodeId,
+      masterUrl,
+      ipAddress: ip_address
+    })
   });
+});
+
+app.patch("/api/infra/nodes/:id", requireRole("admin"), (req, res) => {
+  const { name, type, provider, ip_address, region } = req.body ?? {};
+
+  if (
+    typeof name !== "string" ||
+    typeof type !== "string" ||
+    typeof provider !== "string" ||
+    typeof ip_address !== "string" ||
+    typeof region !== "string"
+  ) {
+    res.status(400).json({ error: "name, type, provider, ip_address, and region are required" });
+    return;
+  }
+
+  const existing = findNodeById(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: "Node not found" });
+    return;
+  }
+
+  updateNode({
+    id: req.params.id,
+    name,
+    type,
+    provider,
+    ip_address,
+    region
+  });
+
+  appendSystemLog("info", name, `Node '${req.params.id}' updated.`);
+  res.json({ success: true, node_id: req.params.id });
+});
+
+app.delete("/api/infra/nodes/:id", requireRole("admin"), (req, res) => {
+  const existing = findNodeById(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: "Node not found" });
+    return;
+  }
+
+  deleteNode(req.params.id);
+  appendSystemLog("info", existing.name, `Node '${existing.name}' deleted.`);
+  res.json({ success: true, node_id: req.params.id });
 });
 
 app.get("/api/infra/containers", (req, res) => {
@@ -163,6 +290,15 @@ app.post("/api/infra/containers/:id/control", requireRole("admin"), (req, res) =
   const container = findContainer(req.params.id);
   if (!container) {
     res.status(404).json({ error: "Container not found" });
+    return;
+  }
+
+  // Only write optimistic state when the agent is reachable. Otherwise we leave
+  // the row alone so reconcile/heartbeat can correct it.
+  if (!isAgentOnline(container.node_id)) {
+    res.status(503).json({
+      error: `Agent '${container.node_id}' is offline; cannot dispatch.`
+    });
     return;
   }
 
@@ -208,13 +344,21 @@ app.post("/api/infra/containers/:id/control", requireRole("admin"), (req, res) =
   });
 });
 
-app.get("/api/cloudflare/dns", requireAuth, async (_req, res) => {
-  if (!cloudflareConfigured()) {
-    res.json({ source: "cache", configured: false, records: listDnsRecordsRows() });
+app.get("/api/cloudflare/dns", requireAuth, async (req, res) => {
+  const zoneId = typeof req.query.zone_id === "string" ? req.query.zone_id : undefined;
+  const zone = resolveCloudflareZone(zoneId);
+
+  if (!zone) {
+    res.json({
+      source: "cache",
+      configured: false,
+      zones: cfListCloudflareZones(),
+      records: listDnsRecordsRows()
+    });
     return;
   }
   try {
-    const live = await cfListDns();
+    const live = await cfListDns(zone.id);
     for (const r of live) {
       upsertDnsRecord({
         id: r.id,
@@ -227,11 +371,25 @@ app.get("/api/cloudflare/dns", requireAuth, async (_req, res) => {
         ttl: r.ttl
       });
     }
-    res.json({ source: "cloudflare", configured: true, records: listDnsRecordsRows() });
+    res.json({
+      source: "cloudflare",
+      configured: true,
+      zones: cfListCloudflareZones(),
+      active_zone: zone,
+      records: listDnsRecordsRows(zone.id)
+    });
   } catch (e) {
     if (isCloudflareError(e)) {
       appendSystemLog("error", "CLOUDFLARE_ENGINE", `List DNS failed: ${e.message}`);
-      res.status(e.status).json({ error: e.message, fallback: listDnsRecordsRows() });
+      const message =
+        e.status === 401 || e.status === 403
+          ? "Cloudflare token cannot access this zone. Use a token scoped to this zone or add this zone to the token permissions."
+          : e.message;
+      res.status(e.status).json({
+        error: message,
+        zones: cfListCloudflareZones(),
+        fallback: listDnsRecordsRows(zone.id)
+      });
       return;
     }
     res.status(500).json({ error: "Cloudflare list failed" });
@@ -240,17 +398,19 @@ app.get("/api/cloudflare/dns", requireAuth, async (_req, res) => {
 
 app.post("/api/cloudflare/dns", requireRole("admin"), async (req, res) => {
   if (rejectIfLocked(res)) return;
-  const { name, type, content, proxied, ttl } = req.body ?? {};
+  const { zone_id, name, type, content, proxied, ttl } = req.body ?? {};
   if (typeof name !== "string" || typeof type !== "string" || typeof content !== "string") {
     res.status(400).json({ error: "name, type, content are required strings" });
     return;
   }
-  if (!cloudflareConfigured()) {
+  const zone = resolveCloudflareZone(typeof zone_id === "string" ? zone_id : undefined);
+  if (!zone) {
     res.status(503).json({ error: "Cloudflare not configured" });
     return;
   }
   try {
     const created = await cfCreateDns({
+      zoneId: zone.id,
       name,
       type,
       content,
@@ -273,7 +433,11 @@ app.post("/api/cloudflare/dns", requireRole("admin"), async (req, res) => {
   } catch (e) {
     if (isCloudflareError(e)) {
       appendSystemLog("error", "CLOUDFLARE_ENGINE", `Create DNS failed: ${e.message}`);
-      res.status(e.status).json({ error: e.message });
+      const message =
+        e.status === 401 || e.status === 403
+          ? "Cloudflare token cannot access this zone. Use a token scoped to this zone or add this zone to the token permissions."
+          : e.message;
+      res.status(e.status).json({ error: message });
       return;
     }
     res.status(500).json({ error: "Cloudflare create failed" });
@@ -282,19 +446,28 @@ app.post("/api/cloudflare/dns", requireRole("admin"), async (req, res) => {
 
 app.delete("/api/cloudflare/dns/:id", requireRole("admin"), async (req, res) => {
   if (rejectIfLocked(res)) return;
-  if (!cloudflareConfigured()) {
+  const record = findDnsRecord(req.params.id);
+  if (!record) {
+    res.status(404).json({ error: "DNS record not found" });
+    return;
+  }
+  if (!cloudflareConfigured(record.zone_id)) {
     res.status(503).json({ error: "Cloudflare not configured" });
     return;
   }
   try {
-    await cfDeleteDns(req.params.id);
+    await cfDeleteDns(record.zone_id, req.params.id);
     deleteDnsRecordRow(req.params.id);
     appendSystemLog("info", "CLOUDFLARE_ENGINE", `DNS record deleted: ${req.params.id}`);
     broadcastToControlPlane({ event_type: "DNS_RECORD_DELETED", data: { id: req.params.id } });
     res.json({ success: true, removed_id: req.params.id });
   } catch (e) {
     if (isCloudflareError(e)) {
-      res.status(e.status).json({ error: e.message });
+      const message =
+        e.status === 401 || e.status === 403
+          ? "Cloudflare token cannot access this zone. Use a token scoped to this zone or add this zone to the token permissions."
+          : e.message;
+      res.status(e.status).json({ error: message });
       return;
     }
     res.status(500).json({ error: "Cloudflare delete failed" });
@@ -354,6 +527,56 @@ const RANGE_MS: Record<string, number> = {
   "7d": 7 * 24 * 60 * 60 * 1_000
 };
 
+app.get("/api/infra/nodes/:id/pve-guests", (req, res) => {
+  res.json(listPveGuests(req.params.id));
+});
+
+app.post("/api/infra/nodes/:id/pve-guests/:kind/:vmid/control", requireRole("admin"), (req, res) => {
+  if (rejectIfLocked(res)) return;
+  const { kind, vmid: vmidStr, id: nodeId } = req.params;
+  const vmid = Number(vmidStr);
+  if (!Number.isFinite(vmid)) {
+    res.status(400).json({ error: "vmid must be a number" });
+    return;
+  }
+  if (kind !== "lxc" && kind !== "qemu") {
+    res.status(400).json({ error: "kind must be 'lxc' or 'qemu'" });
+    return;
+  }
+  const signal = req.body?.signal;
+  if (!["start", "stop", "reboot", "shutdown"].includes(signal)) {
+    res.status(400).json({ error: "signal must be one of: start, stop, reboot, shutdown" });
+    return;
+  }
+  const guest = findPveGuest(nodeId, kind, vmid);
+  if (!guest) {
+    res.status(404).json({ error: "PVE guest not found" });
+    return;
+  }
+  if (!isAgentOnline(nodeId)) {
+    res.status(503).json({ error: `Agent '${nodeId}' is offline; cannot dispatch.` });
+    return;
+  }
+  const transactionId = `pve_${Date.now().toString(36)}`;
+  const dispatched = sendToAgent(nodeId, {
+    action: "PVE_CONTROL",
+    transaction_id: transactionId,
+    vmid,
+    kind,
+    signal
+  });
+  appendSystemLog(
+    "info",
+    nodeId,
+    `PVE ${kind} ${vmid} ('${guest.name}') signal '${signal}' dispatched.`
+  );
+  res.json({
+    success: true,
+    transaction_id: transactionId,
+    dispatched
+  });
+});
+
 app.get("/api/infra/nodes/:id/metrics", (req, res) => {
   const range = typeof req.query.range === "string" ? req.query.range : "1h";
   const windowMs = RANGE_MS[range] ?? RANGE_MS["1h"];
@@ -367,8 +590,9 @@ app.get("/api/infra/nodes/:id/metrics", (req, res) => {
 
 app.post("/api/infra/nodes/:id/regenerate-token", requireRole("admin"), (req, res) => {
   const auth = res.locals.auth as { sub: string } | undefined;
+  const existing = findNodeById(req.params.id);
   const result = rotateNodeToken(req.params.id);
-  if (!result) {
+  if (!result || !existing) {
     res.status(404).json({ error: "Node not found" });
     return;
   }
@@ -381,7 +605,18 @@ app.post("/api/infra/nodes/:id/regenerate-token", requireRole("admin"), (req, re
     success: true,
     node_id: req.params.id,
     secure_token: result.plainToken,
-    download_installer_cmd: `curl -sSL https://get.buildos.io/install.sh | bash -s -- --token ${result.plainToken} --master ${config.appUrl}`
+    download_installer_cmd: buildInstallerCommand({
+      token: result.plainToken,
+      nodeId: req.params.id,
+      masterUrl: config.appUrl,
+      ipAddress: existing.ip_address
+    }),
+    ssh_installer_cmd: buildSshInstallerCommand({
+      token: result.plainToken,
+      nodeId: req.params.id,
+      masterUrl: config.appUrl,
+      ipAddress: existing.ip_address
+    })
   });
 });
 

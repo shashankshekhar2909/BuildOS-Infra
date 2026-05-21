@@ -26,6 +26,11 @@ except ImportError:  # pragma: no cover
     docker = None  # type: ignore[assignment]
     DockerException = Exception  # type: ignore[misc,assignment]
 
+try:
+    from proxmoxer import ProxmoxAPI  # type: ignore
+except ImportError:  # pragma: no cover
+    ProxmoxAPI = None  # type: ignore[assignment,misc]
+
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -42,6 +47,12 @@ ALLOWED_CONTAINERS = {
     if name.strip()
 }
 EMERGENCY_STOP_ON_BLOCK = os.environ.get("EMERGENCY_STOP_ON_BLOCK", "true").lower() in {"1", "true", "yes"}
+AGENT_MODE = os.environ.get("AGENT_MODE", "docker").lower()  # docker | proxmox | hybrid
+PVE_HOST = os.environ.get("PVE_HOST", "https://localhost:8006")
+PVE_USER = os.environ.get("PVE_USER", "root@pam")
+PVE_TOKEN_ID = os.environ.get("PVE_TOKEN_ID", "")
+PVE_TOKEN_SECRET = os.environ.get("PVE_TOKEN_SECRET", "")
+PVE_VERIFY_SSL = os.environ.get("PVE_VERIFY_SSL", "false").lower() in {"1", "true", "yes"}
 
 # Set by EMERGENCY_BLOCK frame from master; cleared by EMERGENCY_RELEASE.
 emergency_locked = False
@@ -55,13 +66,108 @@ def now_iso() -> str:
 
 
 def docker_client():
-    if docker is None:
+    if docker is None or AGENT_MODE == "proxmox":
         return None
     try:
         return docker.from_env()
     except DockerException as exc:
         log.warning("Docker SDK unavailable: %s", exc)
         return None
+
+
+def proxmox_client():
+    if AGENT_MODE not in {"proxmox", "hybrid"}:
+        return None
+    if ProxmoxAPI is None:
+        log.error("proxmoxer not installed; install agent/requirements.txt.")
+        return None
+    if not PVE_TOKEN_ID or not PVE_TOKEN_SECRET:
+        log.error("PVE_TOKEN_ID and PVE_TOKEN_SECRET required for proxmox mode.")
+        return None
+    parsed_host = PVE_HOST.replace("https://", "").replace("http://", "").rstrip("/")
+    host_only, _, port = parsed_host.partition(":")
+    try:
+        return ProxmoxAPI(
+            host_only,
+            user=PVE_USER,
+            token_name=PVE_TOKEN_ID,
+            token_value=PVE_TOKEN_SECRET,
+            verify_ssl=PVE_VERIFY_SSL,
+            port=int(port) if port else 8006
+        )
+    except Exception as exc:  # pragma: no cover
+        log.warning("Proxmox client init failed: %s", exc)
+        return None
+
+
+def collect_pve_guests(prox: Any) -> list[dict[str, Any]]:
+    if prox is None:
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        for n in prox.nodes.get():
+            node_name = n["node"]
+            for guest in prox.nodes(node_name).lxc.get():
+                vmid = int(guest["vmid"])
+                mem = float(guest.get("mem", 0) or 0)
+                maxmem = float(guest.get("maxmem", 1) or 1)
+                disk = float(guest.get("disk", 0) or 0)
+                maxdisk = float(guest.get("maxdisk", 1) or 1)
+                out.append({
+                    "vmid": vmid,
+                    "kind": "lxc",
+                    "name": guest.get("name", f"ct-{vmid}"),
+                    "state": guest.get("status", "unknown"),
+                    "cpu_pct": round(float(guest.get("cpu", 0) or 0) * 100, 2),
+                    "mem_pct": round((mem / maxmem) * 100, 2) if maxmem > 0 else 0.0,
+                    "disk_pct": round((disk / maxdisk) * 100, 2) if maxdisk > 0 else 0.0,
+                    "uptime_seconds": int(guest.get("uptime", 0) or 0)
+                })
+            for guest in prox.nodes(node_name).qemu.get():
+                vmid = int(guest["vmid"])
+                mem = float(guest.get("mem", 0) or 0)
+                maxmem = float(guest.get("maxmem", 1) or 1)
+                out.append({
+                    "vmid": vmid,
+                    "kind": "qemu",
+                    "name": guest.get("name", f"vm-{vmid}"),
+                    "state": guest.get("status", "unknown"),
+                    "cpu_pct": round(float(guest.get("cpu", 0) or 0) * 100, 2),
+                    "mem_pct": round((mem / maxmem) * 100, 2) if maxmem > 0 else 0.0,
+                    "disk_pct": 0.0,
+                    "uptime_seconds": int(guest.get("uptime", 0) or 0)
+                })
+    except Exception as exc:  # pragma: no cover
+        log.warning("PVE list failed: %s", exc)
+    return out
+
+
+def execute_pve_control(prox: Any, vmid: int, kind: str, signal: str) -> tuple[str, str]:
+    if emergency_locked:
+        return "failed", "Emergency lockdown active — PVE control rejected."
+    if prox is None:
+        return "failed", "Proxmox client unavailable."
+    try:
+        for n in prox.nodes.get():
+            node_name = n["node"]
+            collection = prox.nodes(node_name).lxc if kind == "lxc" else prox.nodes(node_name).qemu
+            guests = collection.get()
+            if any(int(g["vmid"]) == vmid for g in guests):
+                status = collection(vmid).status
+                if signal == "start":
+                    status.start.post()
+                elif signal == "stop":
+                    status.stop.post()
+                elif signal == "reboot":
+                    status.reboot.post()
+                elif signal == "shutdown":
+                    status.shutdown.post()
+                else:
+                    return "failed", f"Unknown signal '{signal}'."
+                return "success", f"PVE {kind} {vmid} signal '{signal}' issued."
+        return "failed", f"vmid {vmid} not found on this PVE host."
+    except Exception as exc:  # pragma: no cover
+        return "failed", str(exc)
 
 
 def collect_containers(client: Any) -> list[dict[str, Any]]:
@@ -119,7 +225,7 @@ def execute_docker_control(client: Any, target: str, signal: str) -> tuple[str, 
         return "failed", str(exc)
 
 
-async def heartbeat_loop(ws: Any, client: Any) -> None:
+async def heartbeat_loop(ws: Any, client: Any, prox: Any) -> None:
     while True:
         frame = {
             "action": "HEARTBEAT",
@@ -130,6 +236,15 @@ async def heartbeat_loop(ws: Any, client: Any) -> None:
             },
         }
         await ws.send(json.dumps(frame))
+        if prox is not None:
+            guests = collect_pve_guests(prox)
+            await ws.send(
+                json.dumps({
+                    "action": "PVE_GUESTS",
+                    "client_time": now_iso(),
+                    "guests": guests,
+                })
+            )
         await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
@@ -182,7 +297,7 @@ def stop_tail(container_id: str) -> None:
         task.cancel()
 
 
-async def receive_loop(ws: Any, client: Any) -> None:
+async def receive_loop(ws: Any, client: Any, prox: Any) -> None:
     async for raw in ws:
         try:
             frame = json.loads(raw)
@@ -190,7 +305,23 @@ async def receive_loop(ws: Any, client: Any) -> None:
             continue
 
         action = frame.get("action")
-        if action == "DOCKER_CONTROL":
+        if action == "PVE_CONTROL":
+            tx = frame.get("transaction_id")
+            status, message = execute_pve_control(
+                prox,
+                int(frame.get("vmid", 0)),
+                str(frame.get("kind", "lxc")),
+                str(frame.get("signal", ""))
+            )
+            await ws.send(
+                json.dumps({
+                    "action": "CMD_RESPONSE",
+                    "transaction_id": tx,
+                    "status": status,
+                    "message": message
+                })
+            )
+        elif action == "DOCKER_CONTROL":
             tx = frame.get("transaction_id")
             status, message = execute_docker_control(
                 client,
@@ -243,15 +374,15 @@ async def receive_loop(ws: Any, client: Any) -> None:
             log.debug("Unknown action: %s", action)
 
 
-async def connect_once(client: Any) -> None:
+async def connect_once(client: Any, prox: Any) -> None:
     url = f"{MASTER_URL.rstrip('/')}/{NODE_ID}"
     headers = {"Authorization": f"Bearer {TOKEN}"}
-    log.info("Connecting to %s", url)
+    log.info("Connecting to %s (mode=%s)", url, AGENT_MODE)
     async with websockets.connect(url, additional_headers=headers, max_size=2**20) as ws:
         log.info("Connected as node=%s", NODE_ID)
         psutil.cpu_percent(interval=None)
         try:
-            await asyncio.gather(heartbeat_loop(ws, client), receive_loop(ws, client))
+            await asyncio.gather(heartbeat_loop(ws, client, prox), receive_loop(ws, client, prox))
         finally:
             for cid in list(log_tail_tasks.keys()):
                 stop_tail(cid)
@@ -263,10 +394,11 @@ async def main() -> None:
         sys.exit(1)
 
     client = docker_client()
+    prox = proxmox_client()
     backoff = 1
     while True:
         try:
-            await connect_once(client)
+            await connect_once(client, prox)
         except (ConnectionClosed, OSError) as exc:
             log.warning("Connection lost: %s — reconnecting in %ds", exc, backoff)
         except Exception as exc:  # pragma: no cover

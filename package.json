@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev --port 4225",
+    "dev": "node scripts/dev.mjs",
+    "live": "node scripts/live.mjs",
     "build": "next build",
     "start": "next start",
     "backend": "tsx backend/src/server.ts",

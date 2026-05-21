@@ -18,12 +18,39 @@ services:
       DEFAULT_AGENT_VERSION: ${DEFAULT_AGENT_VERSION:-v1.0.0}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
       CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+      CLOUDFLARE_ZONES: ${CLOUDFLARE_ZONES:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      SKIP_DEMO_SEED: ${SKIP_DEMO_SEED:-false}
     volumes:
       - buildos_data:/app/data
     ports:
       - "8015:8000"
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: buildos_agent_local
+    depends_on:
+      - backend
+    environment:
+      MASTER_SERVER_URL: ${MASTER_SERVER_URL:-ws://backend:8000/api/ws/agent}
+      NODE_ID: ${NODE_ID:-node_vps_3ac29d}
+      SECURE_AGENT_TOKEN: ${SECURE_AGENT_TOKEN:-seed-node-token-1}
+      TELEMETRY_INTERVAL_SECONDS: ${TELEMETRY_INTERVAL_SECONDS:-5}
+      ALLOWED_CONTAINERS: ${ALLOWED_CONTAINERS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      EMERGENCY_STOP_ON_BLOCK: ${EMERGENCY_STOP_ON_BLOCK:-true}
+      AGENT_MODE: ${AGENT_MODE:-docker}
+      PVE_HOST: ${PVE_HOST:-}
+      PVE_USER: ${PVE_USER:-root@pam}
+      PVE_TOKEN_ID: ${PVE_TOKEN_ID:-}
+      PVE_TOKEN_SECRET: ${PVE_TOKEN_SECRET:-}
+      PVE_VERIFY_SSL: ${PVE_VERIFY_SSL:-false}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
 
   control-plane:
     build:

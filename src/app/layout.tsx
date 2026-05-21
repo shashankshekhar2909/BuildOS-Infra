@@ -16,7 +16,21 @@ const monoFont = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "BuildOS Infra",
-  description: "Infrastructure control plane for BuildOS."
+  description: "Infrastructure control plane for BuildOS.",
+  applicationName: "BuildOS Infra",
+  themeColor: "#020617",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "BuildOS"
+  }
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  themeColor: "#020617"
 };
 
 export default function RootLayout({

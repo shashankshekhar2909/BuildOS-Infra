@@ -98,7 +98,7 @@ cd buildos-infra
 cp .env.example .env
 
 # Edit .env — set strong values for JWT_SECRET, ADMIN_PASSWORD, VIEWER_PASSWORD.
-# Optional: paste GEMINI_API_KEY, CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID.
+# Optional: paste GEMINI_API_KEY, CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID or CLOUDFLARE_ZONES.
 
 docker compose up -d --build
 ```
@@ -141,7 +141,8 @@ All variables live in `.env` next to `docker-compose.yml`. The compose file forw
 | `DATABASE_PATH` | `/app/data/buildos-infra.sqlite` | SQLite file (volume-mounted) |
 | `DEFAULT_AGENT_VERSION` | `v1.0.0` | Stamped on new node rows |
 | `CLOUDFLARE_API_TOKEN` | empty | Scoped CF token (`Zone.DNS:Edit`). Empty = DNS routes return cached rows only. |
-| `CLOUDFLARE_ZONE_ID` | empty | Target zone id |
+| `CLOUDFLARE_ZONE_ID` | empty | Single-zone fallback id |
+| `CLOUDFLARE_ZONES` | empty | Comma-separated zone seeds like `name=zone_id,name2=zone_id2` |
 | `GEMINI_API_KEY` | empty | Server-side Google AI Studio key. Empty = co-pilot returns 503. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Override w/ any supported model id |
 
@@ -220,12 +221,50 @@ The dashboard's **Domains** page lists and edits DNS records for a single zone.
 2. Add to `.env`:
    ```bash
    CLOUDFLARE_API_TOKEN="<scoped-token>"
-   CLOUDFLARE_ZONE_ID="<zone-id>"
+   CLOUDFLARE_ZONES="example.com=<zone-id>,other.com=<zone-id>"
    ```
 3. Restart backend: `docker compose up -d --build backend`.
 4. `/api/health` reports `"cloudflare":"configured"`.
 
 Without credentials, GET still works (returns the local mirror in `dns_records`) but writes return 503.
+
+---
+
+## Cloudflare DNS for `os.buildwithshashank.com`
+
+Use this if Cloudflare already fronts your domain and your origin is reachable.
+
+### What I need from you
+
+1. `CLOUDFLARE_ZONE_ID` or `CLOUDFLARE_ZONES`
+2. `CLOUDFLARE_API_TOKEN` scoped to `Zone.DNS:Edit`
+3. The origin target for `os.buildwithshashank.com`
+   - `A` record if you have a public IPv4
+   - `CNAME` if you want to point at another hostname
+4. Whether the record should be `proxied` through Cloudflare
+
+### Setup
+
+1. Put these in `.env`:
+   ```bash
+   CLOUDFLARE_API_TOKEN="..."
+   CLOUDFLARE_ZONES="example.com=ZONE_ID_1,other.com=ZONE_ID_2"
+   APP_BASE_URL="https://os.buildwithshashank.com"
+   NEXT_PUBLIC_APP_BASE_URL="https://os.buildwithshashank.com"
+   APP_URL="https://os.buildwithshashank.com"
+   ```
+2. Restart backend:
+   ```bash
+   docker compose up -d --build backend
+   ```
+3. In the app, open **Domains** and create or update the record for `os.buildwithshashank.com`.
+4. Use **Add zone later** on the same page if you want to add another zone without redeploying.
+
+### Result
+
+- Cloudflare DNS points `os.buildwithshashank.com` at your origin.
+- The app can manage records through the Cloudflare API.
+- No `cloudflared` tunnel needed.
 
 ---
 
@@ -351,21 +390,30 @@ Outbound event types:
 
 ## Local development (no Docker)
 
-Two processes, two terminals.
+Use one command if you want both servers together.
 
 ```bash
 npm install
+npm run live
+```
 
-# Terminal 1 — Express backend on :8000
-npm run backend
+That starts:
+- Express backend on `:8016`
+- Next.js dev server on `:4235`
 
-# Terminal 2 — Next.js dev on :4225
-npm run dev
+If you want split terminals instead:
+
+```bash
+# Terminal 1
+PORT=8016 APP_URL="http://localhost:4235" DATABASE_PATH="./data/buildos-infra.sqlite" npm run backend
+
+# Terminal 2
+PORT=4235 BACKEND_INTERNAL_URL="http://127.0.0.1:8016" npm run dev
 ```
 
 Set in `.env` for this mode:
 ```bash
-BACKEND_INTERNAL_URL="http://localhost:8000"
+BACKEND_INTERNAL_URL="http://127.0.0.1:8016"
 ```
 
 Typecheck (CI gate):
@@ -422,6 +470,7 @@ Aspirational/future-state docs (FastAPI/Python design) sit in `ARCHITECTURE.md`,
 - [ ] `JWT_SECRET` is `openssl rand -hex 32`, not the default.
 - [ ] `ADMIN_PASSWORD`, `VIEWER_PASSWORD` rotated off the defaults.
 - [ ] Cloudflare token is **scoped** (`Zone.DNS:Edit`), not the global API key.
+- [ ] Cloudflare Tunnel token is set and the hostname points to `http://control-plane:3000`.
 - [ ] Gemini key only in backend `.env` — never in any `NEXT_PUBLIC_*` var.
 - [ ] Agents set `ALLOWED_CONTAINERS` to limit blast radius.
 - [ ] `/etc/buildos-agent/config.env` is `chmod 600`, owned by `buildos-agent:buildos-agent` (the installer does this).

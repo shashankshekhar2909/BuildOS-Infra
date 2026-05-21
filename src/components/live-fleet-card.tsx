@@ -25,16 +25,18 @@ export function LiveFleetCard() {
   const onlineCount = entries.filter(([, n]) => n.online).length;
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
-      <div className="flex items-center justify-between">
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Live fleet</div>
-          <h2 className="mt-2 text-2xl font-semibold text-white">
+          <div className="text-[10px] uppercase tracking-[0.24em] text-cyan-200/70 sm:text-xs">
+            Live fleet
+          </div>
+          <h2 className="mt-1 text-lg font-semibold text-white sm:mt-2 sm:text-2xl">
             Real-time agent telemetry
           </h2>
         </div>
         <Badge variant={status === "open" ? "success" : "warning"}>
-          {status === "open" ? `connected · ${onlineCount} online` : status}
+          {status === "open" ? `${onlineCount} online` : status}
         </Badge>
       </div>
 
@@ -50,23 +52,22 @@ export function LiveFleetCard() {
                 key={nodeId}
                 className="rounded-2xl border border-white/10 bg-[#08101d] p-4"
               >
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2 text-sm font-medium text-white">
                       <Activity
-                        className={`size-4 ${n.online ? "text-emerald-400" : "text-amber-400"}`}
+                        className={`size-4 shrink-0 ${n.online ? "text-emerald-400" : "text-amber-400"}`}
                       />
-                      {nodeId}
+                      <span className="truncate font-[family-name:var(--font-mono)]">{nodeId}</span>
                     </div>
                     <div className="mt-1 text-xs text-[var(--muted-foreground)]">
-                      {n.containersRunning}/{n.containersTotal} containers · last seen{" "}
-                      {new Date(n.lastSeen).toLocaleTimeString()}
+                      {n.containersRunning}/{n.containersTotal} containers · {new Date(n.lastSeen).toLocaleTimeString()}
                     </div>
                   </div>
-                  <div className="flex gap-4 text-xs text-cyan-200/80">
-                    <span>CPU {n.cpu.toFixed(1)}%</span>
-                    <span>RAM {n.ram.toFixed(1)}%</span>
-                    <span>Disk {n.disk.toFixed(1)}%</span>
+                  <div className="flex gap-3 text-xs text-cyan-200/80">
+                    <span>CPU {n.cpu.toFixed(0)}%</span>
+                    <span>RAM {n.ram.toFixed(0)}%</span>
+                    <span>Disk {n.disk.toFixed(0)}%</span>
                   </div>
                 </div>
                 <NodeSparklines nodeId={nodeId} />

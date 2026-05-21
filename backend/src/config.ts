@@ -5,6 +5,41 @@ dotenv.config();
 const DEFAULT_PORT = 3000;
 const DEFAULT_APP_URL = `http://localhost:${DEFAULT_PORT}`;
 
+export type CloudflareZoneConfig = {
+  id: string;
+  name: string;
+};
+
+function parseCloudflareZones(): CloudflareZoneConfig[] {
+  const zonesRaw = process.env.CLOUDFLARE_ZONES?.trim();
+  if (zonesRaw) {
+    return zonesRaw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const [namePart, idPart] = entry.includes("=")
+          ? entry.split("=", 2)
+          : entry.includes(":")
+            ? entry.split(":", 2)
+            : ["", entry];
+        const id = idPart.trim();
+        const name = (namePart || id).trim();
+        return id ? { id, name } : null;
+      })
+      .filter((zone): zone is CloudflareZoneConfig => zone !== null);
+  }
+
+  const zoneId = process.env.CLOUDFLARE_ZONE_ID?.trim();
+  if (!zoneId) return [];
+  return [
+    {
+      id: zoneId,
+      name: process.env.CLOUDFLARE_ZONE_NAME?.trim() || zoneId
+    }
+  ];
+}
+
 export const config = {
   port: Number(process.env.PORT ?? DEFAULT_PORT),
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -18,7 +53,7 @@ export const config = {
   databasePath: process.env.DATABASE_PATH ?? "./data/buildos-infra.sqlite",
   defaultAgentVersion: process.env.DEFAULT_AGENT_VERSION ?? "v1.0.0",
   cloudflareApiToken: process.env.CLOUDFLARE_API_TOKEN ?? "",
-  cloudflareZoneId: process.env.CLOUDFLARE_ZONE_ID ?? "",
+  cloudflareZones: parseCloudflareZones(),
   cloudflareApiBase: process.env.CLOUDFLARE_API_BASE ?? "https://api.cloudflare.com/client/v4",
   geminiApiKey: process.env.GEMINI_API_KEY ?? "",
   geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.5-flash"

@@ -22,7 +22,9 @@ export async function apiFetch<T = unknown>(path: string, options: ApiOptions): 
       typeof json === "object" && json !== null && "error" in json
         ? (json as { error?: string }).error ?? `Request failed: ${res.status}`
         : `Request failed: ${res.status}`;
-    throw new Error(errMessage);
+    const error = new Error(errMessage);
+    (error as Error & { status?: number }).status = res.status;
+    throw error;
   }
 
   return json as T;

@@ -6,7 +6,10 @@ import {
   appendSystemLog,
   findNodeById,
   recordNodeMetric,
+  reconcileMissingContainers,
+  reconcileMissingPveGuests,
   upsertContainerFromAgent,
+  upsertPveGuest,
   updateNodePing,
   updateNodeStatus,
   verifyToken
@@ -113,8 +116,10 @@ function handleAgentMessage(socket: AgentSocket, raw: string): void {
       disk_pct: Number.isFinite(disk) ? disk : 0
     });
 
+    const presentIds: string[] = [];
     for (const c of containers as Array<Record<string, unknown>>) {
       if (typeof c.id !== "string" || typeof c.name !== "string") continue;
+      presentIds.push(c.id);
       upsertContainerFromAgent({
         id: c.id,
         node_id: socket.nodeId,
@@ -124,6 +129,14 @@ function handleAgentMessage(socket: AgentSocket, raw: string): void {
         status_text: typeof c.status === "string" ? c.status : null,
         ports_map: typeof c.ports === "string" ? c.ports : null
       });
+    }
+    const missedCount = reconcileMissingContainers(socket.nodeId, presentIds);
+    if (missedCount > 0) {
+      appendSystemLog(
+        "warning",
+        socket.nodeId,
+        `Reconcile: ${missedCount} container row(s) marked 'missing' (no longer on host).`
+      );
     }
 
     broadcastToControlPlane({
@@ -139,6 +152,43 @@ function handleAgentMessage(socket: AgentSocket, raw: string): void {
           (c) => c.state === "running"
         ).length
       }
+    });
+    return;
+  }
+
+  if (action === "PVE_GUESTS") {
+    const guests = Array.isArray(frame.guests) ? frame.guests : [];
+    const present: Array<{ vmid: number; kind: string }> = [];
+    for (const g of guests as Array<Record<string, unknown>>) {
+      const vmid = Number(g.vmid);
+      const kind = typeof g.kind === "string" ? g.kind : "lxc";
+      const name = typeof g.name === "string" ? g.name : `guest-${vmid}`;
+      const state = typeof g.state === "string" ? g.state : "unknown";
+      if (!Number.isFinite(vmid)) continue;
+      present.push({ vmid, kind });
+      upsertPveGuest({
+        node_id: socket.nodeId,
+        vmid,
+        kind,
+        name,
+        state,
+        cpu_pct: Number(g.cpu_pct ?? 0),
+        mem_pct: Number(g.mem_pct ?? 0),
+        disk_pct: Number(g.disk_pct ?? 0),
+        uptime_seconds: Number(g.uptime_seconds ?? 0)
+      });
+    }
+    const missed = reconcileMissingPveGuests(socket.nodeId, present);
+    if (missed > 0) {
+      appendSystemLog(
+        "warning",
+        socket.nodeId,
+        `PVE reconcile: ${missed} guest row(s) marked 'missing'.`
+      );
+    }
+    broadcastToControlPlane({
+      event_type: "PVE_GUESTS_UPDATE",
+      data: { node_id: socket.nodeId, count: guests.length }
     });
     return;
   }

@@ -47,6 +47,7 @@ export const db = new DatabaseSync(databaseFile);
 
 db.exec(`
   PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
 
   CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
@@ -99,6 +100,13 @@ db.exec(`
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS cloudflare_zones (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS system_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -130,6 +138,27 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 }
 ensureColumn("containers", "auto_heal", "auto_heal INTEGER DEFAULT 0");
 ensureColumn("containers", "last_heal_attempt", "last_heal_attempt TEXT");
+ensureColumn("nodes", "parent_node_id", "parent_node_id TEXT");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pve_guests (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    vmid INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    state TEXT NOT NULL,
+    cpu_pct REAL DEFAULT 0,
+    mem_pct REAL DEFAULT 0,
+    disk_pct REAL DEFAULT 0,
+    uptime_seconds INTEGER DEFAULT 0,
+    has_buildos_agent INTEGER DEFAULT 0,
+    child_node_id TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (node_id, vmid, kind)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pve_guests_node ON pve_guests (node_id);
+`);
 
 const countNodesStatement = db.prepare("SELECT COUNT(*) AS count FROM nodes");
 const insertNodeStatement = db.prepare(`
@@ -139,6 +168,16 @@ const insertNodeStatement = db.prepare(`
     @id, @name, @type, @provider, @ip_address, @region, @status, @agent_version, @secret_token_hash, @last_ping
   )
 `);
+const updateNodeStatement = db.prepare(`
+  UPDATE nodes
+  SET name = @name,
+      type = @type,
+      provider = @provider,
+      ip_address = @ip_address,
+      region = @region
+  WHERE id = @id
+`);
+const deleteNodeStatement = db.prepare(`DELETE FROM nodes WHERE id = ?`);
 const insertContainerStatement = db.prepare(`
   INSERT INTO containers (
     id, node_id, name, image, state, status_text, ports_map, cpu_limit, mem_limit, exposed_domain, cf_tunnel_configured
@@ -149,6 +188,11 @@ const insertContainerStatement = db.prepare(`
 const insertLogStatement = db.prepare(`
   INSERT INTO system_logs (timestamp, log_type, source, message)
   VALUES (@timestamp, @log_type, @source, @message)
+`);
+const countCloudflareZonesStatement = db.prepare("SELECT COUNT(*) AS count FROM cloudflare_zones");
+const insertCloudflareZoneStatement = db.prepare(`
+  INSERT INTO cloudflare_zones (id, name)
+  VALUES (@id, @name)
 `);
 
 const ARGON2_OPTS = { algorithm: Algorithm.Argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 };
@@ -260,7 +304,20 @@ function seedDatabase(): void {
   });
 }
 
-seedDatabase();
+if (process.env.SKIP_DEMO_SEED !== "true") {
+  seedDatabase();
+}
+
+function seedCloudflareZones(): void {
+  const row = countCloudflareZonesStatement.get() as { count: number };
+  if (row.count > 0) return;
+
+  for (const zone of config.cloudflareZones) {
+    insertCloudflareZoneStatement.run(zone);
+  }
+}
+
+seedCloudflareZones();
 
 export function createSecureAgentToken(): { plainToken: string; tokenHash: string } {
   const plainToken = `bs_agent_tkn_${crypto.randomBytes(20).toString("hex")}`;
@@ -299,6 +356,23 @@ export function insertNode(input: {
     status: "offline",
     last_ping: new Date().toISOString()
   });
+}
+
+export function updateNode(input: {
+  id: string;
+  name: string;
+  type: string;
+  provider: string;
+  ip_address: string;
+  region: string;
+}): boolean {
+  const result = updateNodeStatement.run(input);
+  return Number(result.changes ?? 0) > 0;
+}
+
+export function deleteNode(id: string): boolean {
+  const result = deleteNodeStatement.run(id);
+  return Number(result.changes ?? 0) > 0;
 }
 
 const CONTAINER_COLS = `
@@ -392,6 +466,97 @@ export function pruneMetrics(olderThanIso: string): number {
   return Number(result.changes ?? 0);
 }
 
+export type PveGuestRow = {
+  id: string;
+  node_id: string;
+  vmid: number;
+  kind: string;
+  name: string;
+  state: string;
+  cpu_pct: number;
+  mem_pct: number;
+  disk_pct: number;
+  uptime_seconds: number;
+  has_buildos_agent: number;
+  child_node_id: string | null;
+  updated_at: string;
+};
+
+const upsertPveGuestStmt = db.prepare(`
+  INSERT INTO pve_guests (
+    id, node_id, vmid, kind, name, state, cpu_pct, mem_pct, disk_pct, uptime_seconds, updated_at
+  ) VALUES (
+    @id, @node_id, @vmid, @kind, @name, @state, @cpu_pct, @mem_pct, @disk_pct, @uptime_seconds, CURRENT_TIMESTAMP
+  )
+  ON CONFLICT(node_id, vmid, kind) DO UPDATE SET
+    name = excluded.name,
+    state = excluded.state,
+    cpu_pct = excluded.cpu_pct,
+    mem_pct = excluded.mem_pct,
+    disk_pct = excluded.disk_pct,
+    uptime_seconds = excluded.uptime_seconds,
+    updated_at = CURRENT_TIMESTAMP
+`);
+
+export function upsertPveGuest(input: {
+  node_id: string;
+  vmid: number;
+  kind: string;
+  name: string;
+  state: string;
+  cpu_pct: number;
+  mem_pct: number;
+  disk_pct: number;
+  uptime_seconds: number;
+}): void {
+  upsertPveGuestStmt.run({
+    ...input,
+    id: `${input.node_id}__${input.kind}_${input.vmid}`
+  });
+}
+
+export function reconcileMissingPveGuests(
+  nodeId: string,
+  present: Array<{ vmid: number; kind: string }>
+): number {
+  if (present.length === 0) {
+    const r = db
+      .prepare(`UPDATE pve_guests SET state = 'missing' WHERE node_id = ? AND state != 'missing'`)
+      .run(nodeId);
+    return Number(r.changes ?? 0);
+  }
+  const ids = present.map((p) => `${nodeId}__${p.kind}_${p.vmid}`);
+  const placeholders = ids.map(() => "?").join(",");
+  const r = db
+    .prepare(
+      `UPDATE pve_guests SET state = 'missing'
+       WHERE node_id = ? AND state != 'missing' AND id NOT IN (${placeholders})`
+    )
+    .run(nodeId, ...ids);
+  return Number(r.changes ?? 0);
+}
+
+export function listPveGuests(nodeId?: string): PveGuestRow[] {
+  if (nodeId) {
+    return db
+      .prepare(`SELECT * FROM pve_guests WHERE node_id = ? ORDER BY vmid ASC`)
+      .all(nodeId) as PveGuestRow[];
+  }
+  return db
+    .prepare(`SELECT * FROM pve_guests ORDER BY node_id ASC, vmid ASC`)
+    .all() as PveGuestRow[];
+}
+
+export function findPveGuest(
+  nodeId: string,
+  kind: string,
+  vmid: number
+): PveGuestRow | undefined {
+  return db
+    .prepare(`SELECT * FROM pve_guests WHERE node_id = ? AND kind = ? AND vmid = ?`)
+    .get(nodeId, kind, vmid) as PveGuestRow | undefined;
+}
+
 export function rotateNodeToken(id: string): { plainToken: string } | null {
   const node = db.prepare(`SELECT id FROM nodes WHERE id = ?`).get(id) as { id: string } | undefined;
   if (!node) return null;
@@ -435,6 +600,23 @@ export function updateNodePing(id: string, status: string): void {
   );
 }
 
+export function reconcileMissingContainers(nodeId: string, presentIds: string[]): number {
+  if (presentIds.length === 0) {
+    const result = db
+      .prepare(`UPDATE containers SET state = 'missing' WHERE node_id = ? AND state != 'missing'`)
+      .run(nodeId);
+    return Number(result.changes ?? 0);
+  }
+  const placeholders = presentIds.map(() => "?").join(",");
+  const result = db
+    .prepare(
+      `UPDATE containers SET state = 'missing'
+       WHERE node_id = ? AND state != 'missing' AND id NOT IN (${placeholders})`
+    )
+    .run(nodeId, ...presentIds);
+  return Number(result.changes ?? 0);
+}
+
 export function upsertContainerFromAgent(input: {
   id: string;
   node_id: string;
@@ -469,10 +651,54 @@ export type DnsRecordRow = {
   updated_at: string;
 };
 
-export function listDnsRecords(): DnsRecordRow[] {
+export type CloudflareZoneRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export function listCloudflareZones(): CloudflareZoneRow[] {
+  return db
+    .prepare(`SELECT id, name, created_at, updated_at FROM cloudflare_zones ORDER BY name ASC`)
+    .all() as CloudflareZoneRow[];
+}
+
+export function upsertCloudflareZone(input: { id: string; name: string }): void {
+  db.prepare(`
+    INSERT INTO cloudflare_zones (id, name)
+    VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(input.id, input.name);
+}
+
+export function deleteCloudflareZone(id: string): void {
+  db.prepare(`DELETE FROM cloudflare_zones WHERE id = ?`).run(id);
+}
+
+export function findCloudflareZone(id: string): CloudflareZoneRow | undefined {
+  return db
+    .prepare(`SELECT id, name, created_at, updated_at FROM cloudflare_zones WHERE id = ?`)
+    .get(id) as CloudflareZoneRow | undefined;
+}
+
+export function listDnsRecords(zoneId?: string): DnsRecordRow[] {
+  if (zoneId) {
+    return db
+      .prepare(`SELECT * FROM dns_records WHERE zone_id = ? ORDER BY updated_at DESC`)
+      .all(zoneId) as DnsRecordRow[];
+  }
   return db
     .prepare(`SELECT * FROM dns_records ORDER BY updated_at DESC`)
     .all() as DnsRecordRow[];
+}
+
+export function findDnsRecord(id: string): DnsRecordRow | undefined {
+  return db
+    .prepare(`SELECT * FROM dns_records WHERE id = ?`)
+    .get(id) as DnsRecordRow | undefined;
 }
 
 export function upsertDnsRecord(input: Omit<DnsRecordRow, "updated_at">): void {

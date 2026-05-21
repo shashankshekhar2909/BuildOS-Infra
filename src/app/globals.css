@@ -31,3 +31,8 @@ body {
 a {
   text-decoration: none;
 }
+
+@keyframes drawerSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}

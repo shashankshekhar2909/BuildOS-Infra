@@ -52,23 +52,23 @@ export function LogStreamCard() {
   }
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
-      <div className="flex items-center justify-between">
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Live logs</div>
-          <h2 className="mt-2 text-2xl font-semibold text-white">Control-plane event stream</h2>
+          <div className="text-[10px] uppercase tracking-[0.24em] text-cyan-200/70 sm:text-xs">Live logs</div>
+          <h2 className="mt-1 text-lg font-semibold text-white sm:mt-2 sm:text-2xl">Event stream</h2>
         </div>
-        <div className="flex items-center gap-3">
-          <Badge variant="success">{rows.length} events</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="success">{rows.length}</Badge>
           <Button size="sm" onClick={diagnoseRecent} disabled={busy || rows.length === 0}>
-            {busy ? "Diagnosing…" : "Diagnose last 50"}
+            {busy ? "…" : "Diagnose 50"}
           </Button>
         </div>
       </div>
 
       <div
         ref={scrollRef}
-        className="mt-4 h-80 overflow-y-auto rounded-2xl border border-white/10 bg-[#040810] p-3 font-[family-name:var(--font-mono)] text-xs"
+        className="mt-4 h-64 overflow-y-auto rounded-2xl border border-white/10 bg-[#040810] p-3 font-[family-name:var(--font-mono)] text-[11px] leading-5 sm:h-80 sm:text-xs"
       >
         {rows.length === 0 ? (
           <div className="text-[var(--muted-foreground)]">Waiting for events…</div>
